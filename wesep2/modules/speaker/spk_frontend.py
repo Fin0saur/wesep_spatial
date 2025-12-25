@@ -190,7 +190,7 @@ class ContextFeature(BaseSpeakerFeature):
             mix_dim=conf_context['mix_dim'],
             num_heads=conf_context['num_heads'],  # 2 or 4
             nband=conf_context[
-                'band'],  #kdim=spk_emb_frame_dim, vdim=spk_emb_frame_dim,
+                'band'],  # kdim=spk_emb_frame_dim, vdim=spk_emb_frame_dim,
             batch_first=True)
         self.fusionLayer = SpeakerFuseLayer(
             embed_dim=conf_context['atten_dim'],
@@ -283,7 +283,7 @@ class SpeakerFrontend(nn.Module):
                     "enabled": False,
                     "causal": False,
                     "spec_dim": 2,
-                    "emb_dim": 128,  #64
+                    "emb_dim": 128,  # 64
                     "enc_dim": 65,
                     "approx_qk_dim": 512,
                     "n_head": 4,
