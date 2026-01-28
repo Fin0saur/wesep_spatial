@@ -357,9 +357,7 @@ class BSRNN(nn.Module):
         est_complex = torch.complex(est_spec_RI[:, 0],
                                     est_spec_RI[:, 1])  # (B, S, F, T)
         # 6. Back into waveform
-        output = self.istft(est_complex)  # (B, S, T)
-        # 7. Squeeze the spk dim, if only one target
-        s = torch.squeeze(output, dim=1)
+        s = self.istft(est_complex)  # (B, S, T)
         return s
 
 

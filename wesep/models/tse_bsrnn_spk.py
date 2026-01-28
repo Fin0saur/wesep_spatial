@@ -78,6 +78,16 @@ class TSE_BSRNN_SPK(nn.Module):
         self.spk_ft = SpeakerFrontend(self.spk_configs)
 
     def forward(self, mix, enroll):
+        """
+        Args:
+            mix:  Tensor [B, 1, T]
+            enroll: list[Tensor]
+                each Tensor: [B, 1, T]
+        """
+
+        mix = mix.squeeze(1)
+        enroll = enroll[0].squeeze(1)
+
         # input shape: (B, T)
         mix_dims = mix.dim()
         assert mix_dims == 2, "Only support 2D Input"
@@ -155,9 +165,7 @@ class TSE_BSRNN_SPK(nn.Module):
         est_complex = torch.complex(est_spec_RI[:, 0],
                                     est_spec_RI[:, 1])  # (B, S, F, T)
         # S6. Back into waveform
-        output = self.sep_model.istft(est_complex)  # (B, S, T)
-        # S7. Squeeze the spk dim, if only one target
-        s = torch.squeeze(output, dim=1)
+        s = self.sep_model.istft(est_complex)  # (B, S, T)
         ###########################################################
         # C0. Feature: listen
         if self.spk_configs['features']['listen']['enabled']:

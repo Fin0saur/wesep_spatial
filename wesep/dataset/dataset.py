@@ -1,5 +1,6 @@
 # Copyright (c) 2021 Mobvoi Inc. (authors: Binbin Zhang)
 #               2023 Shuai Wang (wsstriving@gmail.com)
+#               2026 Ke Zhang (kylezhang1118@gmail.com)
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -16,10 +17,10 @@ import random
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as tf
 from torch.utils.data import IterableDataset
 
 import wesep.dataset.processor as processor
+from wesep.dataset.cues import build_cue_layer
 from wesep.utils.file_utils import read_lists
 
 
@@ -43,9 +44,12 @@ class Processor(IterableDataset):
         assert callable(self.f)
         return self.f(iter(self.source), *self.args, **self.kw)
 
-    def apply(self, f):
-        assert callable(f)
-        return Processor(self, f, *self.args, **self.kw)
+    def apply(self, f, *args, **kw):
+        if args or kw:
+            return Processor(self, f, *args, **kw)
+        else:
+            raise ValueError("Processor.apply() requires explicit args/kw. "
+                             "Implicit parameter inheritance is forbidden.")
 
 
 class DistributedSampler:
@@ -136,174 +140,41 @@ class DataList(IterableDataset):
                 yield data
 
 
-def tse_collate_fn_2spk(batch, mode="min"):
-    # Warning: hard-coded for 2 speakers, will be deprecated in the future,
-    # use tse_collate_fn instead
-    new_batch = {}
-
-    wav_mix = []
-    wav_targets = []
-    spk_embeds = []
-    spk = []
-    key = []
-    spk_label = []
-    length_spk_embeds = []
-    for s in batch:
-        wav_mix.append(s["wav_mix"])
-        wav_targets.append(s["wav_spk1"])
-        spk.append(s["spk1"])
-        key.append(s["key"])
-        spk_embeds.append(torch.from_numpy(s["embed_spk1"].copy()))
-        length_spk_embeds.append(spk_embeds[-1].shape[1])
-        if "spk1_label" in s.keys():
-            spk_label.append(s["spk1_label"])
-
-        wav_mix.append(s["wav_mix"])
-        wav_targets.append(s["wav_spk2"])
-        spk.append(s["spk2"])
-        key.append(s["key"])
-        spk_embeds.append(torch.from_numpy(s["embed_spk2"].copy()))
-        length_spk_embeds.append(spk_embeds[-1].shape[1])
-        if "spk2_label" in s.keys():
-            spk_label.append(s["spk2_label"])
-
-    if not (len(set(length_spk_embeds)) == 1):
-        if mode == "max":
-            max_len = max(length_spk_embeds)
-            for i in range(len(length_spk_embeds)):
-                if len(spk_embeds[i].shape) == 2:
-                    spk_embeds[i] = tf.pad(
-                        spk_embeds[i],
-                        (0, max_len - length_spk_embeds[i]),
-                        "constant",
-                        0,
-                    )
-                elif len(spk_embeds[i].shape) == 3:
-                    spk_embeds[i] = tf.pad(
-                        spk_embeds[i],
-                        (0, 0, 0, max_len - length_spk_embeds[i]),
-                        "constant",
-                        0,
-                    )
-        if mode == "min":
-            min_len = min(length_spk_embeds)
-            for i in range(len(length_spk_embeds)):
-                if len(spk_embeds[i].shape) == 2:
-                    spk_embeds[i] = spk_embeds[i][:, :min_len]
-                elif len(spk_embeds[i].shape) == 3:
-                    spk_embeds[i] = spk_embeds[i][:, :min_len, :]
-
-    new_batch["wav_mix"] = torch.concat(wav_mix)
-    new_batch["wav_targets"] = torch.concat(wav_targets)
-    new_batch["spk_embeds"] = torch.concat(spk_embeds)
-    new_batch["length_spk_embeds"] = length_spk_embeds
-    new_batch["spk"] = spk
-    new_batch["key"] = key
-    new_batch["spk_label"] = torch.as_tensor(spk_label)
-    return new_batch
-
-
-def tse_collate_fn(batch, mode="min"):
-    # This is a more generalizable implementation for target speaker extraction
-    # Support arbitrary number of speakers
-    new_batch = {}
-    wav_mix = []
-    wav_targets = []
-    spk_embeds = []
-    spk = []
-    key = []
-    spk_label = []
-    length_spk_embeds = []
-    for s in batch:
-        for i in range(s["num_speaker"]):
-            wav_mix.append(s["wav_mix"])
-            wav_targets.append(s["wav_spk{}".format(i + 1)])
-            spk.append(s["spk{}".format(i + 1)])
-            key.append(s["key"])
-            spk_embeds.append(
-                torch.from_numpy(s["embed_spk{}".format(i + 1)].copy()))
-            length_spk_embeds.append(spk_embeds[-1].shape[1])
-            if "spk{}_label".format(i + 1) in s.keys():
-                spk_label.append(s["spk{}_label".format(i + 1)])
-
-    if not (len(set(length_spk_embeds)) == 1):
-        if mode == "max":
-            max_len = max(length_spk_embeds)
-            for i in range(len(length_spk_embeds)):
-                if len(spk_embeds[i].shape) == 2:
-                    spk_embeds[i] = tf.pad(
-                        spk_embeds[i],
-                        (0, max_len - length_spk_embeds[i]),
-                        "constant",
-                        0,
-                    )
-                elif len(spk_embeds[i].shape) == 3:
-                    spk_embeds[i] = tf.pad(
-                        spk_embeds[i],
-                        (0, 0, 0, max_len - length_spk_embeds[i]),
-                        "constant",
-                        0,
-                    )
-        if mode == "min":
-            min_len = min(length_spk_embeds)
-            for i in range(len(length_spk_embeds)):
-                if len(spk_embeds[i].shape) == 2:
-                    spk_embeds[i] = spk_embeds[i][:, :min_len]
-                elif len(spk_embeds[i].shape) == 3:
-                    spk_embeds[i] = spk_embeds[i][:, :min_len, :]
-
-    new_batch["wav_mix"] = torch.concat(wav_mix)
-    new_batch["wav_targets"] = torch.concat(wav_targets)
-    new_batch["spk_embeds"] = torch.concat(spk_embeds)
-    new_batch["length_spk_embeds"] = (
-        length_spk_embeds  # Not used, but maybe needed when using the enrollment utterance  # noqa
-    )
-    new_batch["spk"] = spk
-    new_batch["key"] = key
-    new_batch["spk_label"] = torch.as_tensor(spk_label)
-    return new_batch
-
-
 def Dataset(
     data_type,
     data_list_file,
     configs,
-    spk2embed_dict=None,
-    spk1_embed=None,
-    spk2_embed=None,
     state="train",
-    joint_training=False,
-    dict_spk=None,
-    whole_utt=False,
     repeat_dataset=False,
-    noise_enroll_prob=0,
-    reverb_enroll_prob=0,
-    specaug_enroll_prob=0,
-    online_mix=False,
+    cues_yaml=None,
 ):
-    """Construct dataset from arguments
-    We have two shuffle stage in the Dataset. The first is global
-    shuffle at shards tar/raw/feat file level. The second is local shuffle
-    at training samples level.
-
-    Args:
-        :param spk2_embed:
-        :param online_mix:
-        :param spk1_embed:
-        :param data_type(str): shard/raw/feat
-        :param data_list_file: data list file
-        :param configs: dataset configs
-        :param noise_enroll_prob:probility to add noise on enrollment speech
-        :param reverb_enroll_prob:probility to add reverb on enrollment speech
-        :param specaug_enroll_prob: probility to apply SpecAug on fbank of enrollment speech  # noqa
-        :param whole_utt: use whole utt or random chunk
-        :param repeat_dataset:
-    """
     assert data_type in ["shard", "raw"]
+
     lists = read_lists(data_list_file)
     shuffle = configs.get("shuffle", False)
-    # Global shuffle
+    online_mix = configs.get("online_mix", False)
+
     dataset = DataList(lists, shuffle=shuffle, repeat_dataset=repeat_dataset)
+
+    # 1) Source layer
+    dataset = build_source_layer(dataset, data_type, online_mix)
+
+    # 2) Basic audio preprocessing
+    dataset = build_audio_base_layer(dataset, configs, state, online_mix)
+
+    # 3) Online mix & augmentation
+    if state == "train":
+        dataset = build_mix_layer(dataset, configs, state, online_mix)
+
+    # 4) Cue layer (speaker / visual / spatial / semantic)
+    if cues_yaml is not None:
+        dataset = build_cue_layer(dataset, cues_yaml, state, configs)
+
+    return dataset
+
+
+def build_source_layer(dataset, data_type, online_mix):
+    # 1) Source layer
     if data_type == "shard":
         dataset = Processor(dataset, processor.url_opener)
         if not online_mix:
@@ -312,99 +183,70 @@ def Dataset(
             dataset = Processor(dataset,
                                 processor.tar_file_and_group_single_spk)
     else:
-        dataset = Processor(dataset, processor.parse_raw)
+        if not online_mix:
+            dataset = Processor(dataset, processor.parse_raw)
+        else:
+            raise RuntimeError("online_mix is not supported for raw mode")
+    return dataset
 
-    if configs.get("filter_len", False) and state == "train":
-        # Filter the data with unwanted length
-        filter_conf = configs.get("filter_args", {})
-        dataset = Processor(dataset, processor.filter_len, **filter_conf)
-    # Local shuffle
-    if shuffle and not online_mix:
-        dataset = Processor(dataset, processor.shuffle,
-                            **configs["shuffle_args"])
 
-    # resample
+def build_audio_base_layer(dataset, configs, state, online_mix):
+    # 2) Basic audio preprocessing
+    if state == "train":
+        if configs.get("filter_len", False):
+            filter_conf = configs.get("filter_args", {})
+            dataset = Processor(dataset, processor.filter_len, **filter_conf)
+
+        if not online_mix:
+            if configs.get("shuffle", False):
+                dataset = Processor(
+                    dataset,
+                    processor.shuffle,
+                    **configs["shuffle_args"],
+                )
+
     resample_rate = configs.get("resample_rate", 16000)
     dataset = Processor(dataset, processor.resample, resample_rate)
 
-    timeline_conf = configs.get("timeline", None)
+    whole_utt = configs.get("whole_utt", False)
     if not whole_utt:
-        # random chunk
         chunk_len = configs.get("chunk_len", resample_rate * 3)
         dataset = Processor(dataset, processor.random_chunk, chunk_len)
-    else:
-        timeline_conf = None  # whole_utt=True, timeline will be ignored.
 
-    if state == "train":
-        if online_mix:
-            dataset = Processor(
-                dataset,
-                processor.sample_speaker_group,
-                configs.get("num_speakers", None),
-                configs.get("online_buffer_size", 1000),
-                timeline_conf,
-            )
-            dataset = Processor(dataset, processor.apply_timeline)
-            dataset = Processor(dataset, processor.add_reverb,
-                                configs.get("reverb_prob", 0),
-                                configs.get("reverb_conf", None))
-            dataset = Processor(dataset, processor.snr_mixer,
-                                configs.get("snr_conf", None))
+    return dataset
 
-        if configs.get("noise_prob", 0) > 0:
-            assert configs.get("noise_lmdb_file", None) is not None
-            dataset = Processor(dataset, processor.add_noise,
-                                configs.get("noise_lmdb_file", None),
-                                configs.get("noise_prob", 0))
 
-    speaker_feat = configs.get("speaker_feat", False)
-    if state == "train":
-        if not joint_training:
-            dataset = Processor(dataset, processor.sample_spk_embedding,
-                                spk2embed_dict)
-        else:
-            dataset = Processor(dataset, processor.sample_enrollment,
-                                spk2embed_dict, dict_spk)
-            if reverb_enroll_prob > 0:
-                dataset = Processor(dataset, processor.add_reverb_on_enroll,
-                                    reverb_enroll_prob)
-            if noise_enroll_prob > 0:
-                assert noise_lmdb_file is not None
-                dataset = Processor(
-                    dataset,
-                    processor.add_noise_on_enroll,
-                    noise_lmdb_file,
-                    noise_enroll_prob,
-                )
-            if speaker_feat:
-                dataset = Processor(dataset, processor.compute_fbank,
-                                    **configs["fbank_args"])
-                dataset = Processor(dataset, processor.apply_cmvn)
-                if specaug_enroll_prob > 0:
-                    dataset = Processor(dataset,
-                                        processor.spec_aug,
-                                        prob=specaug_enroll_prob)
-    else:
-        if not joint_training:
-            dataset = Processor(
-                dataset,
-                processor.sample_fix_spk_embedding,
-                spk2embed_dict,
-                spk1_embed,
-                spk2_embed,
-            )
-        else:
-            dataset = Processor(
-                dataset,
-                processor.sample_fix_spk_enrollment,
-                spk2embed_dict,
-                spk1_embed,
-                spk2_embed,
-                dict_spk,
-            )
-            if speaker_feat:
-                dataset = Processor(dataset, processor.compute_fbank,
-                                    **configs["fbank_args"])
-                dataset = Processor(dataset, processor.apply_cmvn)
+def build_mix_layer(dataset, configs, state, online_mix):
+    # 3) Online mix & augmentation
+    if online_mix:
+        timeline_conf = configs.get("timeline", None)
+
+        dataset = Processor(
+            dataset,
+            processor.sample_speaker_group,
+            configs.get("num_speakers", None),
+            configs.get("online_buffer_size", 1000),
+            timeline_conf,
+        )
+        dataset = Processor(dataset, processor.apply_timeline)
+        dataset = Processor(
+            dataset,
+            processor.add_reverb,
+            configs.get("reverb_prob", 0),
+            configs.get("reverb_conf", None),
+        )
+        dataset = Processor(
+            dataset,
+            processor.snr_mixer,
+            configs.get("snr_conf", None),
+        )
+
+    if configs.get("noise_prob", 0) > 0:
+        dataset = Processor(
+            dataset,
+            processor.add_noise,
+            configs.get("noise_lmdb_file"),
+            configs.get("noise_prob"),
+        )
 
     return dataset

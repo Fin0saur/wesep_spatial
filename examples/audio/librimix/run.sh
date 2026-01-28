@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Copyright 2023 Shuai Wang (wangshuai@cuhk.edu.cn)
-
+#           2026 Ke Zhang (kylezhang1118@gmail.com)
 . ./path.sh || exit 1
 
 # General configuration
@@ -13,15 +13,14 @@ data=data
 fs=16k
 min_max=min
 noise_type="clean"
-data_type="shard" # shard/raw
+data_type="raw" # shard/raw
 Libri2Mix_dir=/YourPATH/librimix/Libri2Mix
 mix_data_path="${Libri2Mix_dir}/wav${fs}/${min_max}"
 
 # Training related
 gpus="[0]"
-use_gan_loss=false
-config=confs/bsrnn.yaml
-exp_dir=exp/BSRNN/no_spk_transform-multiply_fuse
+config=confs/tse_bsrnn_spk.yaml
+exp_dir=exp/TSE_BSRNN_SPK
 if [ -z "${config}" ] && [ -f "${exp_dir}/config.yaml" ]; then
   config="${exp_dir}/config.yaml"
 fi
@@ -30,7 +29,7 @@ fi
 checkpoint=
 
 # Inferencing and scoring related
-save_results=true
+save_results=False
 use_pesq=true
 use_dnsmos=true
 dnsmos_use_gpu=true
@@ -51,20 +50,20 @@ fi
 
 data=${data}/${noise_type}
 
-if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
-  echo "Covert train and test data to ${data_type}..."
+if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ] && [ "${datatype}" = "shard" ]; then
+  echo "Making shards from samples.jsonl ..."
   for dset in train-100 dev test; do
-    #  for dset in train-360; do
-    python tools/make_shard_list_premix.py --num_utts_per_shard 1000 \
+  #  for dset in train-360; do
+    python tools/make_shards_from_samples.py \
+      --samples ${data}/${dset}/samples.jsonl \
+      --num_utts_per_shard 1000 \
       --num_threads 16 \
       --prefix shards \
       --shuffle \
-      ${data}/$dset/wav.scp ${data}/$dset/utt2spk \
-      ${data}/$dset/shards ${data}/$dset/shard.list
+      ${data}/${dset}/shards \
+      ${data}/${dset}/shard.list
   done
 fi
-
-
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   echo "Start training ..."
@@ -72,11 +71,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   if [ -z "${checkpoint}" ] && [ -f "${exp_dir}/models/latest_checkpoint.pt" ]; then
     checkpoint="${exp_dir}/models/latest_checkpoint.pt"
   fi
-  if ${use_gan_loss}; then
-    train_script=wesep/bin/train_gan.py  # Will remove
-  else
-    train_script=wesep/bin/train.py
-  fi
+  train_script=wesep/bin/train.py
   export OMP_NUM_THREADS=8
   torchrun --standalone --nnodes=1 --nproc_per_node=$num_gpus \
     ${train_script} --config $config \
@@ -85,12 +80,11 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     --num_avg ${num_avg} \
     --data_type "${data_type}" \
     --train_data ${data}/train-100/${data_type}.list \
-    --train_utt2spk ${data}/train-100/single.utt2spk \
-    --train_spk2utt ${data}/train-100/spk2enroll.json \
+    --train_cues ${data}/train-100/cues.yaml \
+    --train_samples ${data}/train-100/samples.jsonl \
     --val_data ${data}/dev/${data_type}.list \
-    --val_spk1_enroll ${data}/dev/spk1.enroll \
-    --val_spk2_enroll ${data}/dev/spk2.enroll \
-    --val_spk2utt ${data}/dev/single.wav.scp \
+    --val_cues ${data}/dev/cues.yaml \
+    --val_samples ${data}/dev/samples.jsonl \
     ${checkpoint:+--checkpoint $checkpoint}
 fi
 
@@ -118,9 +112,8 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     --exp_dir ${exp_dir} \
     --data_type "${data_type}" \
     --test_data ${data}/test/${data_type}.list \
-    --test_spk1_enroll ${data}/test/spk1.enroll \
-    --test_spk2_enroll ${data}/test/spk2.enroll \
-    --test_spk2utt ${data}/test/single.wav.scp \
+    --test_cues ${data}/test/cues.yaml \
+    --test_samples ${data}/test/samples.jsonl \
     --save_wav ${save_results} \
     ${checkpoint:+--checkpoint $checkpoint}
 fi

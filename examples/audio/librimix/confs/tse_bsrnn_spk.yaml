@@ -1,5 +1,5 @@
 dataloader_args:
-  batch_size: 8 #RTX2080 1, V100: 8, A800: 16
+  batch_size: 2 #RTX2080 1, V100: 8, A800: 16
   drop_last: true
   num_workers: 6
   pin_memory: true
@@ -12,21 +12,16 @@ dataset_args:
   shuffle_args:
     shuffle_size: 2500
   chunk_len: 48000
-  speaker_feat: &speaker_feat False
-  fbank_args:
-    num_mel_bins: 80
-    frame_shift: 10
-    frame_length: 25
-    dither: 1.0
-  noise_lmdb_file: './data/musan/lmdb'
   noise_prob: 0 # prob to add noise aug per sample
-  specaug_enroll_prob: 0 # prob to apply SpecAug on fbank of enrollment speech
-  reverb_enroll_prob: 0 # prob to add reverb aug on enrollment speech
-  noise_enroll_prob: 0 # prob to add noise aug on enrollment speech
-  # Self-estimated Speech Augmentation (SSA). Please ref our SLT paper: https://www.arxiv.org/abs/2409.09589
-  # only Single-optimization method is supported here.
-  # if you want to use multi-optimization, please ref bsrnn_multi_optim.yaml
-  SSA_enroll_prob:  0  # prob to add SSA on enrollment speech
+  noise_lmdb_file: './data/musan/lmdb'
+  cues:
+    audio:
+      use: true
+      required: true
+  cue_processing:
+    audio:
+      reverb_enroll_prob: 0
+      noise_enroll_prob: 0
 
 enable_amp: false
 exp_dir: exp/BSRNN
@@ -36,7 +31,7 @@ log_batch_interval: 100
 loss: SISDR
 loss_args: { }
 
-# loss: [SISDR, CE]               ### For joint training the speaker encoder with CE loss. Put SISDR in the first position for validation set
+# loss: [SISDR, XX]               ### Put SISDR in the first position for validation set
 # loss_args:
 #   loss_posi: [[0],[1]]
 #   loss_weight: [[1.0],[1.0]]
@@ -45,8 +40,6 @@ model:
   tse_model: TSE_BSRNN_SPK
 model_args:
   tse_model:
-    joint_training: True
-    multi_task: False
     separator:
       sr: *sr
       win: 512
@@ -61,13 +54,13 @@ model_args:
           enabled: False
           glue: 512
         usef:
-          enabled: False
+          enabled: True
           spec_dim: 2
           approx_qk_dim: 512
           n_head: 4
           t_ksize: 3
         tfmap:
-          enabled: True
+          enabled: False
           type: "spec"   # 'spec'
         context:
           enabled: True

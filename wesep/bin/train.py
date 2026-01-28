@@ -1,5 +1,5 @@
 # Copyright (c) 2023 Shuai Wang (wsstriving@gmail.com)
-#
+#               2026 Ke Zhang (kylezhang1118@gmail.com)
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import logging
 import os
 import re
@@ -28,7 +27,12 @@ import yaml
 from torch.utils.data import DataLoader
 
 import wesep.utils.schedulers as schedulers
-from wesep.dataset.dataset import Dataset, tse_collate_fn, tse_collate_fn_2spk
+from wesep.dataset.dataset import Dataset
+from wesep.dataset.collate import (
+    BASE_COLLECT_KEYS,
+    build_collect_keys,
+    tse_collate_fn,
+)
 from wesep.models import get_model
 from wesep.utils.checkpoint import (
     load_checkpoint,
@@ -36,13 +40,9 @@ from wesep.utils.checkpoint import (
     save_checkpoint,
 )
 from wesep.utils.executor import Executor
-from wesep.utils.file_utils import (
-    load_speaker_embeddings,
-    read_label_file,
-    read_vec_scp_file,
-)
 from wesep.utils.losses import parse_loss
 from wesep.utils.utils import parse_config_or_kwargs, set_seed, setup_logger
+from wesep.utils.file_utils import load_yaml
 
 MAX_NUM_log_files = 100  # The maximum number of log-files to be kept
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
@@ -109,93 +109,54 @@ def train(config="conf/config.yaml", **kwargs):
     )
     loss_args = (loss_posi, loss_weight)
 
-    # embeds
-    tr_spk_embeds = configs.get("train_spk_embeds", None)
-    tr_single_utt2spk = configs["train_utt2spk"]
-    joint_training = configs["model_args"]["tse_model"].get(
-        "joint_training", False)
-    multi_task = configs["model_args"]["tse_model"].get("multi_task", False)
-
-    dict_spk = {}
-    if not joint_training and tr_spk_embeds:
-        tr_spk2embed_dict = load_speaker_embeddings(tr_spk_embeds,
-                                                    tr_single_utt2spk)
-        multi_task = None
-    else:
-        with open(configs["train_spk2utt"], "r") as f:
-            tr_spk2embed_dict = json.load(f)
-            if multi_task:
-                for i, j in enumerate(tr_spk2embed_dict.keys(
-                )):  # Generate the dictionary for speakers in training set
-                    dict_spk[j] = i
-
-    with open(tr_single_utt2spk, "r") as f:
-        tr_lines = f.readlines()
-
-    val_spk_embeds = configs.get("val_spk_embeds", None)
-    val_spk1_enroll = configs["val_spk1_enroll"]
-    val_spk2_enroll = configs["val_spk2_enroll"]
-
-    if not joint_training and val_spk_embeds:
-        val_spk2embed_dict = read_vec_scp_file(val_spk_embeds)
-    else:
-        val_spk2embed_dict = read_label_file(configs["val_spk2utt"])
-
-    val_lines = len(val_spk2embed_dict)
-
-    val_spk1_embed = read_label_file(val_spk1_enroll)
-    val_spk2_embed = read_label_file(val_spk2_enroll)
-
     # dataset and dataloader
     train_dataset = Dataset(
         configs["data_type"],
         configs["train_data"],
         configs["dataset_args"],
-        tr_spk2embed_dict,
-        None,
-        None,
         state="train",
-        joint_training=joint_training,
-        dict_spk=dict_spk,
-        whole_utt=configs.get("whole_utt", False),
         repeat_dataset=configs.get("repeat_dataset", True),
-        noise_enroll_prob=configs["dataset_args"].get("noise_enroll_prob", 0),
-        reverb_enroll_prob=configs["dataset_args"].get("reverb_enroll_prob",
-                                                       0),
-        specaug_enroll_prob=configs["dataset_args"].get(
-            "specaug_enroll_prob", 0),
-        online_mix=configs["dataset_args"].get("online_mix", False),
+        cues_yaml=configs.get("train_cues", None),
     )
     val_dataset = Dataset(
         configs["data_type"],
         configs["val_data"],
         configs["dataset_args"],
-        val_spk2embed_dict,
-        val_spk1_embed,
-        val_spk2_embed,
         state="val",
-        joint_training=joint_training,
-        whole_utt=configs.get("whole_utt", False),
         repeat_dataset=True,
-        online_mix=False,
+        cues_yaml=configs.get("val_cues", None),
+    )
+    train_collect_keys = build_collect_keys(
+        load_yaml(configs["train_cues"]),
+        configs["dataset_args"],
+        BASE_COLLECT_KEYS,
+    )
+    val_collect_keys = build_collect_keys(
+        load_yaml(configs["val_cues"]),
+        configs["dataset_args"],
+        BASE_COLLECT_KEYS,
     )
     train_dataloader = DataLoader(
         train_dataset,
         **configs["dataloader_args"],
-        collate_fn=tse_collate_fn,
+        collate_fn=lambda batch: tse_collate_fn(batch, train_collect_keys),
     )
     val_dataloader = DataLoader(
         val_dataset,
         **configs["dataloader_args"],
-        collate_fn=tse_collate_fn_2spk,
+        collate_fn=lambda batch: tse_collate_fn(batch, val_collect_keys),
     )
     batch_size = configs["dataloader_args"]["batch_size"]
     if configs["dataset_args"].get("sample_num_per_epoch", 0) > 0:
         sample_num_per_epoch = configs["dataset_args"]["sample_num_per_epoch"]
     else:
-        sample_num_per_epoch = len(tr_lines) // 2
+        with open(configs["train_samples"], "r", encoding="utf-8") as f:
+            sample_num_per_epoch = sum(1 for _ in f)
     epoch_iter = sample_num_per_epoch // world_size // batch_size
-    val_iter = val_lines // 2 // world_size // batch_size
+    with open(configs["val_samples"], "r", encoding="utf-8") as f:
+        val_sample_num = sum(1 for _ in f)
+    val_iter = val_sample_num // world_size // batch_size
+
     if rank == 0:
         logger.info("<== Dataloaders ==>")
         logger.info("train dataloaders created")
@@ -317,11 +278,7 @@ def train(config="conf/config.yaml", **kwargs):
             log_batch_interval=configs["log_batch_interval"],
             device=device,
             se_loss_weight=loss_args,
-            multi_task=multi_task,
-            SSA_enroll_prob=configs["dataset_args"].get("SSA_enroll_prob", 0),
-            fbank_args=configs["dataset_args"].get('fbank_args', None),
-            sample_rate=configs["dataset_args"]['resample_rate'],
-            speaker_feat=configs["dataset_args"].get('speaker_feat', True))
+        )
 
         val_loss, _ = executor.cv(
             val_dataloader,

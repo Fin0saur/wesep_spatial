@@ -11,7 +11,6 @@ import numpy as np
 import soundfile as sf
 import torch
 import torchaudio
-import torchaudio.compliance.kaldi as kaldi
 from scipy import signal
 
 from wesep.dataset.FRAM_RIR import single_channel as RIR_sim
@@ -63,58 +62,134 @@ def tar_file_and_group(data):
         Iterable[{key, mix_wav, spk1_wav, spk2_wav, ..., sample_rate}]
     """
     for sample in data:
-        assert "stream" in sample
         stream = tarfile.open(fileobj=sample["stream"], mode="r:*")
-        # TODO: The mode need to be validated
-        # In order to be compatible with the torch 2.x version,
-        # the file reading method here does not use streaming.
+
         prev_prefix = None
         example = {}
-        num_speakers = 0
         valid = True
+        num_speakers = 0
+
         for tarinfo in stream:
             name = tarinfo.name
             pos = name.rfind(".")
-            assert pos > 0
+            if pos <= 0:
+                continue
+
             prefix, postfix = name[:pos], name[pos + 1:]
-            if prev_prefix is not None and prev_prefix not in prefix:
+
+            # ---- new sample ----
+            if prev_prefix is not None and not prefix.startswith(prev_prefix):
                 example["key"] = prev_prefix
                 if valid:
                     example["num_speaker"] = num_speakers
-                    num_speakers = 0
+                    for k in list(example.keys()):
+                        if k.startswith("wav_"):
+                            example[k] = torch.cat(example[k], dim=0)
                     yield example
                 example = {}
                 valid = True
-            with stream.extractfile(tarinfo) as file_obj:
+                num_speakers = 0
+
+            with stream.extractfile(tarinfo) as f:
                 try:
-                    if "spk" in postfix:
-                        example[postfix] = (
-                            file_obj.read().decode("utf8").strip())
+                    if postfix.startswith("spk"):
+                        example[postfix] = f.read().decode("utf8").strip()
                         num_speakers += 1
+
                     elif postfix in AUDIO_FORMAT_SETS:
-                        waveform, sample_rate = torchaudio.load(file_obj)
-                        if prefix[-5:-1] == "_spk":
-                            example["wav" + prefix[-5:]] = waveform
+                        waveform, sr = torchaudio.load(f)
+
+                        if prefix.endswith("_spk1"):
+                            example.setdefault("wav_spk1", []).append(waveform)
+                            prefix = prefix[:-5]
+                        elif prefix.endswith("_spk2"):
+                            example.setdefault("wav_spk2", []).append(waveform)
                             prefix = prefix[:-5]
                         else:
-                            example["wav_mix"] = waveform
-                            example["sample_rate"] = sample_rate
-                    else:
-                        example[postfix] = file_obj.read()
+                            example.setdefault("wav_mix", []).append(waveform)
+                            example["sample_rate"] = sr
+
                 except Exception as ex:
                     valid = False
-                    logging.warning("error to parse {}".format(name))
+                    logging.warning(f"Failed to parse {name}: {ex}")
+
             prev_prefix = prefix
 
         if prev_prefix is not None:
             example["key"] = prev_prefix
             example["num_speaker"] = num_speakers
-            num_speakers = 0
+            for k in list(example.keys()):
+                if k.startswith("wav_"):
+                    example[k] = torch.cat(example[k], dim=0)
             yield example
+
         stream.close()
-        if "process" in sample:
-            sample["process"].communicate()
         sample["stream"].close()
+
+
+# def tar_file_and_group(data):
+#     """Expand a stream of open tar files into a stream of tar file contents.
+#     And groups the file with same prefix
+
+#     Args:
+#         data: Iterable[{src, stream}]
+
+#     Returns:
+#         Iterable[{key, mix_wav, spk1_wav, spk2_wav, ..., sample_rate}]
+#     """
+#     for sample in data:
+#         assert "stream" in sample
+#         stream = tarfile.open(fileobj=sample["stream"], mode="r:*")
+#         # TODO: The mode need to be validated
+#         # In order to be compatible with the torch 2.x version,
+#         # the file reading method here does not use streaming.
+#         prev_prefix = None
+#         example = {}
+#         num_speakers = 0
+#         valid = True
+#         for tarinfo in stream:
+#             name = tarinfo.name
+#             pos = name.rfind(".")
+#             assert pos > 0
+#             prefix, postfix = name[:pos], name[pos + 1:]
+#             if prev_prefix is not None and prev_prefix not in prefix:
+#                 example["key"] = prev_prefix
+#                 if valid:
+#                     example["num_speaker"] = num_speakers
+#                     num_speakers = 0
+#                     yield example
+#                 example = {}
+#                 valid = True
+#             with stream.extractfile(tarinfo) as file_obj:
+#                 try:
+#                     if "spk" in postfix:
+#                         example[postfix] = (
+#                             file_obj.read().decode("utf8").strip())
+#                         num_speakers += 1
+#                     elif postfix in AUDIO_FORMAT_SETS:
+#                         waveform, sample_rate = torchaudio.load(file_obj)
+#                         if prefix[-5:-1] == "_spk":
+#                             example["wav" + prefix[-5:]] = waveform
+#                             prefix = prefix[:-5]
+#                         else:
+#                             example["wav_mix"] = waveform
+#                             example["sample_rate"] = sample_rate
+#                     else:
+#                         example[postfix] = file_obj.read()
+#                 except Exception as ex:
+#                     valid = False
+#                     logging.warning("error to parse {}".format(name))
+#             prev_prefix = prefix
+
+#         if prev_prefix is not None:
+#             example["key"] = prev_prefix
+#             example["num_speaker"] = num_speakers
+#             num_speakers = 0
+#             yield example
+#         stream.close()
+#         if "process" in sample:
+#             sample["process"].communicate()
+#         sample["stream"].close()
 
 
 def tar_file_and_group_single_spk(data):
@@ -167,6 +242,131 @@ def tar_file_and_group_single_spk(data):
         if "process" in sample:
             sample["process"].communicate()
         sample["stream"].close()
+
+
+def parse_raw(data):
+    """Parse samples.jsonl line into wav tensors.
+
+    Args:
+        data: Iterable[dict], each item like:
+          {
+            "src": "<json string>",
+            "rank": ...,
+            "world_size": ...,
+            ...
+          }
+
+    Yields:
+        dict with fields aligned to shards:
+          {
+            key,
+            num_speaker,
+            spk1, spk2, ...
+            wav_mix,
+            wav_spk1, wav_spk2, ...
+            sample_rate
+          }
+    """
+    for sample in data:
+        assert "src" in sample
+        json_line = sample["src"]
+
+        try:
+            obj = json.loads(json_line)
+        except Exception as ex:
+            logging.warning(f"Bad json line: {json_line}")
+            continue
+
+        # --- required fields ---
+        key = obj["key"]
+        spk_ids = obj["spk"]  # e.g. ["412", "2836"]
+        mix_dict = obj["mix"]  # {"default": [mix.wav]}
+        src_dict = obj["src"]  # {"412": [...], "2836": [...]}
+
+        num_speaker = len(spk_ids)
+
+        # --- load mix ---
+        # current convention: use default channel, first path
+        mix_paths = mix_dict.get("default", [])
+        if len(mix_paths) == 0:
+            logging.warning(f"No mix path for sample {key}")
+            continue
+
+        #########################
+        ### Handle with multi-channel mix, should notice the target is still choiced with the default first file
+        wav_list = []
+        sample_rate = None
+        min_len = None
+
+        for ch_idx, mix_path in enumerate(mix_paths):
+            try:
+                wav_ch, sr = torchaudio.load(mix_path)  # (1, T) or (T,)
+            except Exception:
+                logging.warning(f"Failed to read mix wav: {mix_path}")
+                wav_list = []
+                break
+
+            # normalize shape to (T,)
+            if wav_ch.dim() == 2 and wav_ch.size(0) == 1:
+                wav_ch = wav_ch.squeeze(0)
+
+            if sample_rate is None:
+                sample_rate = sr
+                min_len = wav_ch.size(-1)
+            else:
+                if sr != sample_rate:
+                    logging.warning(f"Sample rate mismatch in {key}: "
+                                    f"mix={sample_rate}, ch{ch_idx}={sr}")
+                min_len = min(min_len, wav_ch.size(-1))
+
+            wav_list.append(wav_ch)
+
+        if len(wav_list) == 0:
+            continue
+
+        # length align (safe default)
+        if any(w.size(-1) != min_len for w in wav_list):
+            wav_list = [w[..., :min_len] for w in wav_list]
+
+        # stack into (C, T)
+        wav_mix = torch.stack(wav_list, dim=0)
+        #########################
+
+        example = {
+            "key": key,
+            "num_speaker": num_speaker,
+            "wav_mix": wav_mix,
+            "sample_rate": sample_rate,
+        }
+
+        # --- load sources ---
+        for i, spk_id in enumerate(spk_ids, start=1):
+            if spk_id not in src_dict:
+                logging.warning(
+                    f"Speaker {spk_id} not in src for sample {key}")
+                continue
+
+            src_paths = src_dict[spk_id]
+            if len(src_paths) == 0:
+                logging.warning(
+                    f"No src path for speaker {spk_id} in sample {key}")
+                continue
+
+            src_path = src_paths[0]
+
+            try:
+                wav_spk, sr = torchaudio.load(src_path)
+            except Exception:
+                logging.warning(f"Failed to read src wav: {src_path}")
+                continue
+
+            if sr != sample_rate:
+                logging.warning(f"Sample rate mismatch in {key}: "
+                                f"mix={sample_rate}, src={sr}")
+
+            example[f"spk{i}"] = spk_id
+            example[f"wav_spk{i}"] = wav_spk
+        yield example
 
 
 def parse_raw_single_spk(data):
@@ -452,26 +652,6 @@ def shuffle(data, shuffle_size=2500):
         yield x
 
 
-def spk_to_id(data, spk2id):
-    """Parse spk id
-
-    Args:
-        data: Iterable[{key, wav/feat, spk}]
-        spk2id: Dict[str, int]
-
-    Returns:
-        Iterable[{key, wav/feat, label}]
-    """
-    for sample in data:
-        assert "spk" in sample
-        if sample["spk"] in spk2id:
-            label = spk2id[sample["spk"]]
-        else:
-            label = -1
-        sample["label"] = label
-        yield sample
-
-
 def resample(data, resample_rate=16000):
     """Resample data.
     Inplace operation.
@@ -493,153 +673,6 @@ def resample(data, resample_rate=16000):
                     sample[key] = torchaudio.transforms.Resample(
                         orig_freq=sample_rate,
                         new_freq=resample_rate)(waveform)
-        yield sample
-
-
-def sample_spk_embedding(data, spk_embeds):
-    """sample reference speaker embeddings for the target speaker
-    Args:
-        data: Iterable[{key, wav, label, sample_rate}]
-        spk_embeds: dict which stores all potential embeddings for the speaker
-    Returns:
-        Iterable[{key, wav, label, sample_rate}]
-    """
-    for sample in data:
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("spk"):
-                sample["embed_" + key] = random.choice(spk_embeds[sample[key]])
-        yield sample
-
-
-def sample_fix_spk_embedding(data, spk2embed_dict, spk1_embed, spk2_embed):
-    """sample reference speaker embeddings for the target speaker
-    Args:
-        data: Iterable[{key, wav, label, sample_rate}]
-        spk_embeds: dict which stores all potential embeddings for the speaker
-    Returns:
-        Iterable[{key, wav, label, sample_rate}]
-    """
-    for sample in data:
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("spk"):
-                if key == "spk1":
-                    sample["embed_" +
-                           key] = spk2embed_dict[spk1_embed[sample["key"]]]
-                else:
-                    sample["embed_" +
-                           key] = spk2embed_dict[spk2_embed[sample["key"]]]
-        yield sample
-
-
-def sample_enrollment(data, spk_embeds, dict_spk):
-    """sample reference speech for the target speaker
-    Args:
-        data: Iterable[{key, wav, label, sample_rate}]
-        spk_embeds: dict which stores all potential enrollment utterance files(/.wav) for the speaker  # noqa
-        dict_spk: dict of speakers in the enrollment sets [Order: spkID]
-    Returns:
-        Iterable[{key, wav, label, sample_rate, spk_embed(raw waveform of enrollment),  # noqa
-                  spk_lable(when multi-task training)}]
-    """
-    for sample in data:
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("spk"):
-                enrollment, _ = sf.read(
-                    random.choice(spk_embeds[sample[key]])[1])
-                sample["embed_" + key] = np.expand_dims(enrollment, axis=0)
-                if dict_spk:
-                    sample[key + "_label"] = dict_spk[sample[key]]
-        yield sample
-
-
-def sample_fix_spk_enrollment(data,
-                              spk2embed_dict,
-                              spk1_embed,
-                              spk2_embed,
-                              dict_spk=None):
-    """sample reference speaker embeddings for the target speaker
-    Args:
-        data: Iterable[{key, wav, label, sample_rate}]
-        spk_embeds: dict which stores all potential enrollment utterance files(/.wav) for the speaker  # noqa
-        dict_spk: dict of speakers in the enrollment sets [Order: spkID]
-    Returns:
-        Iterable[{key, wav, label, sample_rate, spk_embed(raw waveform of enrollment),  # noqa
-                  spk_lable(when multi-task training)}]
-    """
-    for sample in data:
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("spk"):
-                if key == "spk1":
-                    enrollment, _ = sf.read(
-                        spk2embed_dict[spk1_embed[sample["key"]]])
-                else:
-                    enrollment, _ = sf.read(
-                        spk2embed_dict[spk2_embed[sample["key"]]])
-                sample["embed_" + key] = np.expand_dims(enrollment, axis=0)
-                if dict_spk:
-                    sample[key + "_label"] = dict_spk[sample[key]]
-        yield sample
-
-
-def compute_fbank(data,
-                  num_mel_bins=80,
-                  frame_length=25,
-                  frame_shift=10,
-                  dither=1.0):
-    """Extract fbank
-
-    Args:
-        data: Iterable['spk1', 'spk2', 'wav_mix', 'sample_rate', 'wav_spk1', 'wav_spk2', 'key', 'num_speaker', 'embed_spk1', 'embed_spk2']  # noqa
-
-    Returns:
-        Iterable['spk1', 'spk2', 'wav_mix', 'sample_rate', 'wav_spk1', 'wav_spk2', 'key', 'num_speaker', 'embed_spk1', 'embed_spk2']  # noqa
-    """
-    for sample in data:
-        assert "sample_rate" in sample
-        sample_rate = sample["sample_rate"]
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("embed"):
-                waveform = torch.from_numpy(sample[key])
-                waveform = waveform * (1 << 15)
-                mat = kaldi.fbank(
-                    waveform,
-                    num_mel_bins=num_mel_bins,
-                    frame_length=frame_length,
-                    frame_shift=frame_shift,
-                    dither=dither,
-                    sample_frequency=sample_rate,
-                    window_type="hamming",
-                    use_energy=False,
-                )
-                sample[key] = mat
-        yield sample
-
-
-def apply_cmvn(data, norm_mean=True, norm_var=False):
-    """Apply CMVN
-
-    Args:
-        data: Iterable['spk1', 'spk2', 'wav_mix', 'sample_rate', 'wav_spk1', 'wav_spk2', 'key', 'num_speaker', 'embed_spk1', 'embed_spk2']  # noqa
-
-    Returns:
-        Iterable['spk1', 'spk2', 'wav_mix', 'sample_rate', 'wav_spk1', 'wav_spk2', 'key', 'num_speaker', 'embed_spk1', 'embed_spk2']  # noqa
-    """
-    for sample in data:
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("embed"):
-                mat = sample[key]
-                if norm_mean:
-                    mat = mat - torch.mean(mat, dim=0)
-                if norm_var:
-                    mat = mat / torch.sqrt(torch.var(mat, dim=0) + 1e-8)
-                mat = mat.unsqueeze(0)
-                sample[key] = mat.detach().numpy()
         yield sample
 
 
@@ -900,186 +933,4 @@ def add_reverb(data, reverb_prob=0, reverb_conf=None, rng=random):
             out = signal.convolve(audio, rir, mode="full")[:, :audio.shape[1]]
             sample[f"wav_spk{i+1}"] = torch.from_numpy(out)
 
-        yield sample
-
-
-def add_noise_on_enroll(
-    data,
-    noise_lmdb_file,
-    noise_enroll_prob: float = 0.0,
-    noise_db_low: int = 0,
-    noise_db_high: int = 25,
-    single_channel: bool = True,
-):
-    """Add noise to mixture
-
-    Args:
-        data: Iterable[{key, wav_mix, wav_spk1, wav_spk2, ..., spk1, spk2, ...}]
-        noise_lmdb_file: noise LMDB data source.
-        noise_db_low (int, optional): SNR lower bound. Defaults to 0.
-        noise_db_high (int, optional): SNR upper bound. Defaults to 25.
-        single_channel (bool, optional): Whether to force the noise file to be single channel.  # noqa
-                                         Defaults to True.
-
-    Returns:
-        Iterable[{key, wav_mix, wav_spk1, wav_spk2, ..., spk1, spk2, ..., noise, snr}]  # noqa
-    """
-
-    noise_source = LmdbData(noise_lmdb_file)
-    for sample in data:
-        assert "sample_rate" in sample.keys()
-        tgt_fs = sample["sample_rate"]
-        all_keys = list(sample.keys())
-        for key in all_keys:
-            if key.startswith("spk") and "label" not in key:
-                if noise_enroll_prob > random.random():
-                    speech = sample["embed_" + key]
-                    nsamples = speech.shape[1]
-                    power = (speech**2).mean()
-                    noise_key, noise_data = noise_source.random_one()
-                    if noise_key.startswith(
-                            "speech"
-                    ):  # using interference speech as additive noise
-                        snr_range = [10, 30]
-                    else:
-                        snr_range = [noise_db_low, noise_db_high]
-                    noise_db = np.random.uniform(snr_range[0], snr_range[1])
-                    _, noise_data = noise_source.random_one()
-                    with sf.SoundFile(io.BytesIO(noise_data)) as f:
-                        fs = f.samplerate
-                        if tgt_fs and fs != tgt_fs:
-                            nsamples_ = int(nsamples / tgt_fs * fs) + 1
-                        else:
-                            nsamples_ = nsamples
-                        if f.frames == nsamples_:
-                            noise = f.read(dtype=np.float64, always_2d=True)
-                        elif f.frames < nsamples_:
-                            offset = np.random.randint(0, nsamples_ - f.frames)
-                            # noise: (Time, Nmic)
-                            noise = f.read(dtype=np.float64, always_2d=True)
-                            # Repeat noise
-                            noise = np.pad(
-                                noise,
-                                [
-                                    (offset, nsamples_ - f.frames - offset),
-                                    (0, 0),
-                                ],
-                                mode="wrap",
-                            )
-                        else:
-                            offset = np.random.randint(0, f.frames - nsamples_)
-                            f.seek(offset)
-                            # noise: (Time, Nmic)
-                            noise = f.read(nsamples_,
-                                           dtype=np.float64,
-                                           always_2d=True)
-                            if len(noise) != nsamples_:
-                                raise RuntimeError(
-                                    f"Something wrong: {noise_lmdb_file}")
-
-                    if single_channel:
-                        num_ch = noise.shape[1]
-                        chs = [np.random.randint(num_ch)]
-                        noise = noise[:, chs]
-                    # noise: (Nmic, Time)
-                    noise = noise.T
-                    if tgt_fs and fs != tgt_fs:
-                        logging.warning(
-                            f"Resampling noise to match the sampling rate ({fs} -> {tgt_fs} Hz)"  # noqa
-                        )
-                        noise = librosa.resample(
-                            noise,
-                            orig_sr=fs,
-                            target_sr=tgt_fs,
-                            res_type="kaiser_fast",
-                        )
-                        if noise.shape[1] < nsamples:
-                            noise = np.pad(
-                                noise,
-                                [(0, 0), (0, nsamples - noise.shape[1])],
-                                mode="wrap",
-                            )
-                        else:
-                            noise = noise[:, :nsamples]
-                    noise_power = (noise**2).mean()
-                    scale = (10**(-noise_db / 20) * np.sqrt(power) /
-                             np.sqrt(max(noise_power, 1e-10)))
-                    scaled_noise = scale * noise
-                    speech = speech + scaled_noise
-                    sample["embed_" + key] = speech
-        yield sample
-
-
-def add_reverb_on_enroll(data, reverb_enroll_prob=0):
-    """
-    Args:
-        data: Iterable[{key, wav_spk1, wav_spk2, ..., spk1, spk2, ...}]
-
-    Returns:
-        Iterable[{key, wav_spk1, wav_spk2, ..., spk1, spk2, ...}]
-
-    """
-    for sample in data:
-        assert "num_speaker" in sample.keys()
-        assert "sample_rate" in sample.keys()
-        for i in range(sample["num_speaker"]):
-            simu_config["sr"] = sample["sample_rate"]
-            simu_config["num_src"] = 1
-            rirs, _ = RIR_sim(simu_config)  # [n_mic, nsource, nsamples]
-            rirs = rirs[0]  # [nsource, nsamples]
-            if reverb_enroll_prob > random.random():
-                # [1, audio_len], currently only support single-channel audio
-                audio = sample[f"embed_spk{i+1}"]
-                # rir = rirs[i : i + 1, :]  # [1, nsamples]
-                rir = rirs
-                rir_audio = signal.convolve(
-                    audio, rir,
-                    mode="full")[:, :audio.shape[1]]  # [1, audio_len]
-
-                max_scale = np.max(np.abs(rir_audio))
-                out_audio = rir_audio / max_scale * 0.9
-                # Note: Here, we do not replace the dry audio with the reverberant audio,  # noqa
-                # which means we hope the model to perform dereverberation and
-                # TSE simultaneously.
-                sample[f"embed_spk{i+1}"] = out_audio
-
-        yield sample
-
-
-def spec_aug(data, num_t_mask=1, num_f_mask=1, max_t=10, max_f=8, prob=0):
-    """Do spec augmentation
-    Inplace operation
-
-    Args:
-        data: Iterable[{key, feat, label}]
-        num_t_mask: number of time mask to apply
-        num_f_mask: number of freq mask to apply
-        max_t: max width of time mask
-        max_f: max width of freq mask
-        prob: prob of spec_aug
-
-    Returns
-        Iterable[{key, feat, label}]
-    """
-    for sample in data:
-        if random.random() < prob:
-            all_keys = list(sample.keys())
-            for key in all_keys:
-                if key.startswith("embed"):
-                    y = sample[key]
-                    max_frames = y.shape[1]
-                    max_freq = y.shape[2]
-                    # time mask
-                    for i in range(num_t_mask):
-                        start = random.randint(0, max_frames - 1)
-                        length = random.randint(1, max_t)
-                        end = min(max_frames, start + length)
-                        y[:, start:end, :] = 0
-                    # freq mask
-                    for i in range(num_f_mask):
-                        start = random.randint(0, max_freq - 1)
-                        length = random.randint(1, max_f)
-                        end = min(max_freq, start + length)
-                        y[:, :, start:end] = 0
-                    sample[key] = y
         yield sample

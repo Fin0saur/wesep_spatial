@@ -8,10 +8,15 @@ import soundfile
 import torch
 from torch.utils.data import DataLoader
 
-from wesep.dataset.dataset import Dataset, tse_collate_fn_2spk
+from wesep.dataset.dataset import Dataset
+from wesep.dataset.collate import (
+    BASE_COLLECT_KEYS,
+    build_collect_keys,
+    tse_collate_fn,
+    AUX_KEY_MAP,
+)
 from wesep.models import get_model
 from wesep.utils.checkpoint import load_pretrained_model
-from wesep.utils.file_utils import read_label_file, read_vec_scp_file
 from wesep.utils.score import cal_SISNRi
 from wesep.utils.utils import (
     generate_enahnced_scp,
@@ -72,52 +77,41 @@ def infer(config="confs/conf.yaml", **kwargs):
     model = model.to(device)
     model.eval()
 
-    test_spk_embeds = configs.get("test_spk_embeds", None)
-    test_spk1_embed_scp = configs["test_spk1_enroll"]
-    test_spk2_embed_scp = configs["test_spk2_enroll"]
-    joint_training = configs["model_args"]["tse_model"].get(
-        "joint_training", None)
-    if not joint_training and test_spk_embeds:
-        test_spk2embed_dict = read_vec_scp_file(test_spk_embeds)
-    else:
-        test_spk2embed_dict = read_label_file(configs["test_spk2utt"])
-
-    test_spk1_embed = read_label_file(test_spk1_embed_scp)
-    test_spk2_embed = read_label_file(test_spk2_embed_scp)
-
-    lines = len(test_spk2embed_dict)
-
     test_dataset = Dataset(
         configs["data_type"],
         configs["test_data"],
         configs["dataset_args"],
-        test_spk2embed_dict,
-        test_spk1_embed,
-        test_spk2_embed,
         state="test",
-        joint_training=joint_training,
         whole_utt=configs.get("whole_utt", True),
         repeat_dataset=configs.get("repeat_dataset", False),
+        cues_yaml=configs.get("test_cues", None),
     )
-    test_dataloader = DataLoader(test_dataset,
-                                 batch_size=1,
-                                 collate_fn=tse_collate_fn_2spk)
-    test_iter = lines // 2
+    test_collect_keys = build_collect_keys(
+        load_yaml(configs["test_cues"]),
+        configs["dataset_args"],
+        BASE_COLLECT_KEYS,
+    )
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=1,
+        collate_fn=lambda batch: tse_collate_fn(batch, test_collect_keys))
+
+    with open(configs["val_samples"], "r", encoding="utf-8") as f:
+        test_iter = sum(1 for _ in f)
     logger.info("test number: {}".format(test_iter))
 
     with torch.no_grad():
         for i, batch in enumerate(test_dataloader):
-            features = batch["wav_mix"]
-            targets = batch["wav_targets"]
-            enroll = batch["spk_embeds"]
+
+            mix, cues, target = extract_model_inputs(batch, device)
             spk = batch["spk"]
             key = batch["key"]
 
-            features = features.float().to(device)  # (B,T,F)
-            targets = targets.float().to(device)
-            enroll = enroll.float().to(device)
+            if cues is None:
+                outputs = model(mix)
+            else:
+                outputs = model(mix, cues)
 
-            outputs = model(features, enroll)
             if isinstance(outputs, (list, tuple)):
                 outputs = outputs[0]
 
@@ -140,9 +134,9 @@ def infer(config="confs/conf.yaml", **kwargs):
                 )
                 soundfile.write(file2, outputs[1], sample_rate)
 
-            ref = targets.cpu().numpy()
+            ref = target.cpu().numpy()
             ests = outputs
-            mix = features.cpu().numpy()
+            mix = mix.cpu().numpy()
 
             if ests[0].size != ref[0].size:
                 end = min(ests[0].size, ref[0].size, mix[0].size)
@@ -192,6 +186,38 @@ def infer(config="confs/conf.yaml", **kwargs):
     logger.info(
         "Acceptance rate of Utterances with SI-SDRi > 1 dB: {:.2f}".format(
             accept_cnt / total_cnt * 100))
+
+
+def extract_model_inputs(batch, device):
+    """
+        Build model inputs from collated batch.
+
+        Args:
+            batch: dict from tse_collate_fn
+            device: torch.device
+
+        Returns:
+            mix:    Tensor [B, 1, T]
+            cues:   list[Tensor] or None
+            target: Tensor [B, 1, T]
+        """
+    if "wav_mix" not in batch:
+        raise RuntimeError("[executor] Missing required key: wav_mix")
+    if "wav_target" not in batch:
+        raise RuntimeError("[executor] Missing required key: wav_target")
+
+    mix = batch["wav_mix"].float().to(device)
+    target = batch["wav_target"].float().to(device)
+
+    cues = []
+    for k in list(AUX_KEY_MAP.values()):
+        if k in batch and batch[k] is not None:
+            cues.append(batch[k].float().to(device))
+
+    if len(cues) == 0:
+        cues = None
+
+    return mix, cues, target
 
 
 if __name__ == "__main__":
