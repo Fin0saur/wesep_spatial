@@ -210,7 +210,7 @@ class DataGenerator:
             
             base_dir = os.path.join(self.output_base, folder_name)
             dirs = {
-                'mix': os.path.join(base_dir, 'mix'),
+                'mix': os.path.join(base_dir, 'mix_clean'),
                 's1': os.path.join(base_dir, 's1'),
                 's2': os.path.join(base_dir, 's2'),
                 'spatial': os.path.join(base_dir, 'spatial')
@@ -233,7 +233,7 @@ class DataGenerator:
                     
                 s1_id = self._get_file_id(target_src_file)
                 s2_id = self._get_file_id(interf_file)
-                output_filename = f"{idx}_{s1_id}_{s2_id}"
+                output_filename = f"{s1_id}_{s2_id}"
                     
                 ov_min, ov_max = mix_cfg['overlap_ratio_range']
                 overlap_ratio = np.random.uniform(ov_min, ov_max)
