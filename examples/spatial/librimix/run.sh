@@ -19,9 +19,9 @@ mix_data_path="${Libri2Mix_dir}/wav${fs}/${min_max}"
 
 # Training related
 gpus="[0,1,2,3]"
-config=confs/tse_bsrnn_spatial.yaml
+config=confs/tse_nbc2_spatial.yaml
 data_config=confs/create_dataset.yaml
-exp_dir=exp/TSE_BSRNN_Spatial
+exp_dir=exp/TSE_NBC2_Spatial
 if [ -z "${config}" ] && [ -f "${exp_dir}/config.yaml" ]; then
   config="${exp_dir}/config.yaml"
 fi
