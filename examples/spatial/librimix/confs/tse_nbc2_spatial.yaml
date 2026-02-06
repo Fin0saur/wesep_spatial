@@ -71,11 +71,17 @@ model_args:
         ipd: 
           enabled: True        
         cdf: 
-          enabled: True        
+          enabled: False       
         sdf: 
-          enabled: True        
+          enabled: False        
         delta_stft: 
           enabled: True
+        cyc_doaemb:
+          enabled: True
+          cyc_alpha: 20
+          cyc_dimension: 40
+          use_ele: True
+          out_channel: 1          
 
 # find_unused_parameters: True
 

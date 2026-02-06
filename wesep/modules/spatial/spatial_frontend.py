@@ -3,17 +3,20 @@ import torch.nn as nn
 import math
 from wesep.modules.common.deep_update import deep_update
 from wesep.modules.feature.speech import STFT
+from wesep.modules.spatial.pos_encoding import CycPosEncoding
 
 class BaseSpatialFeature(nn.Module):
-    def __init__(self, config, geometry_ctx):
+    def __init__(self, config, geometry_ctx=None):
         """
         geometry_ctx: 包含几何常量的字典或对象
         config: 可能包含 'pairs' 作为默认值
         """
         super().__init__()
+        self.config=config
         self.default_pairs = config.get('pairs', None)
-        self.register_buffer('mic_pos', geometry_ctx['mic_pos'])
-        self.register_buffer('omega_over_c', geometry_ctx['omega_over_c'])
+        if geometry_ctx != None:
+            self.register_buffer('mic_pos', geometry_ctx['mic_pos'])
+            self.register_buffer('omega_over_c', geometry_ctx['omega_over_c'])
 
     def _get_pairs(self, pairs_arg):
         if pairs_arg is not None:
@@ -38,11 +41,119 @@ class BaseSpatialFeature(nn.Module):
         TPD = self.omega_over_c.view(1, 1, F_dim, 1) * dist_delay.unsqueeze(-1).unsqueeze(-1)
         return TPD 
 
-    def compute(self, Y, azi, ele, pairs=None):
+    def compute(self, azi, ele=None, Y=None,pairs=None):
         raise NotImplementedError
 
     def post(self, mix_repr, spatial_repr):
         raise NotImplementedError
+
+class CycEncoder(BaseSpatialFeature):
+    def __init__(self, config):
+        """
+        Args:
+            config: 包含配置的字典或对象
+                    config['cyc_doaemb'] 需包含:
+                    - 'dimension': 编码维度 (D)
+                    - 'out_channel': 输出特征维度 (C')
+                    - 'use_ele':是否使用俯仰角 (bool)
+        """
+        super().__init__(config)
+        
+        # 1. 解析配置
+        enc_cfg = self.config
+        self.embed_dim = enc_cfg['cyc_dimension']  # e.g., 40
+        self.alpha = enc_cfg.get('cyc_alpha', 1.0) # e.g., 20
+        self.enabled = enc_cfg['enabled']
+        self.use_ele = enc_cfg.get('use_ele', False) # 获取是否使用俯仰角的开关
+        out_channels = enc_cfg['out_channel']
+        
+        # 2. 核心组件: Cyclic Positional Encoding
+        self.cyc_pos = CycPosEncoding(embed_dim=self.embed_dim, alpha=self.alpha)
+        
+        # 3. 确定 MLP 的输入维度
+        # 如果同时使用方位角和俯仰角，我们将两个编码后的向量拼接
+        # 因此输入维度是 embed_dim * 2，否则就是 embed_dim
+        mlp_input_dim = self.embed_dim * 2 if self.use_ele else self.embed_dim
+        
+        # 4. Clue Encoder Structure (Linear -> LN -> PReLU)
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_input_dim, out_channels), # 动态调整输入维度
+            nn.LayerNorm(out_channels),
+            nn.PReLU()
+        )
+        
+        self.out_channels = out_channels
+
+    def compute(self, azi, ele=None, Y=None,pairs=None):
+        """
+        Args:
+            azi: (B, T) 或 (B, 1) - 方位角
+            ele: (B, T) 或 (B, 1) - 俯仰角 (当 self.use_ele=True 时必须提供)
+            Y: Ignored
+        
+        Returns:
+            spatial_repr: (B, out_channels, 1, T)
+        """
+        if not self.enabled:
+            return None
+        # 1. 编码方位角 (Encode Azimuth)
+        # Input: (B, T) -> Output: (B, T, D)
+        
+        if azi.dim() == 1:
+            azi = azi.unsqueeze(1) # (B,) -> (B, 1)
+        if ele != None and ele.dim() == 1:
+            ele = ele.unsqueeze(1)
+        
+        enc_feat = self.cyc_pos(azi)
+
+        # 2. 编码俯仰角并拼接 (Encode Elevation and Concat)
+        if self.use_ele:
+            if ele is None:
+                raise ValueError("Config indicates 'use_ele=True' but 'ele' input is None!")
+            
+            # Input: (B, T) -> Output: (B, T, D)
+            enc_ele = self.cyc_pos(ele)
+            
+            # 拼接: 在特征维度 (last dim) 进行拼接
+            # (B, T, D) + (B, T, D) -> (B, T, 2*D)
+            
+            # print(f"shape:{enc_feat.shape},shape2:{enc_ele.shape}")
+            
+            enc_feat = torch.cat([enc_feat, enc_ele], dim=-1)
+        
+        # 3. MLP Projection (融合特征)
+        # Input: (B, T, mlp_input_dim) -> Output: (B, T, out_channels)
+        spatial_repr = self.mlp(enc_feat)
+        
+        # 4. 维度调整以适配声谱图 (B, C, F, T)
+        # (B, T, C) -> Permute to (B, C, T) -> Unsqueeze to (B, C, 1, T)
+        spatial_repr = spatial_repr.permute(0, 2, 1).unsqueeze(2)
+        
+        return spatial_repr
+
+    def post(self, mix_repr, spatial_repr):
+        """
+        Args:
+            mix_repr: (B, C_mix, F, T)  <-- 也就是 (Batch, Channel, 257, Time)
+            spatial_repr: (B, C_enc, 1, T) 或 (B, C_enc, 1, 1)
+        Returns:
+            Fused feature: (B, C_mix + C_enc, F, T)
+        """
+        if spatial_repr is None:
+            return mix_repr
+            
+        # 1. 获取主干网络特征的目标形状 (F 和 T)
+        target_F = mix_repr.shape[2]
+        target_T = mix_repr.shape[3]
+        
+        # 2. 双重广播 (Broadcast)
+        spatial_repr_expanded = spatial_repr.expand(-1, -1, target_F, target_T)
+        
+        # 3. 拼接 (Concat)
+        out = torch.cat([mix_repr, spatial_repr_expanded], dim=1)
+        
+        return out
+
 
 class IPDFeature(BaseSpatialFeature):
     def compute(self, Y, azi, ele, pairs=None):
@@ -138,6 +249,13 @@ class SpatialFrontend(nn.Module):
                 "cdf": {"enabled": True},
                 "sdf": {"enabled": True},
                 "delta_stft": {"enabled": True},
+                "cyc_doaemb":{
+                    "enabled": True,
+                    "cyc_alpha": 20,
+                    "cyc_dimension": 40,
+                    "use_ele": True,
+                    "out_channel": 1
+                }
             }
         }
         self.config = deep_update(DEFAULT_CONFIG, config)
@@ -180,6 +298,9 @@ class SpatialFrontend(nn.Module):
 
         if feat_cfg['delta_stft']['enabled']:
             self.features['delta_stft'] = DSTFTFeature({'pairs': self.default_pairs}, geometry_ctx)
+            
+        if feat_cfg['cyc_doaemb']['enabled']:
+            self.features['cyc_doaemb']= CycEncoder(feat_cfg['cyc_doaemb'])
 
     def compute_all(self, Y, azi, ele=None, pairs=None):
         """
@@ -190,6 +311,42 @@ class SpatialFrontend(nn.Module):
         
         out = {}
         for name, module in self.features.items():
-            out[name] = module.compute(Y, azi, ele, pairs=pairs)
+            out[name] = module.compute(Y=Y, azi=azi, ele=ele, pairs=pairs)
             
         return out
+    def post_all(self, mix_repr, feature_dict):
+        """
+        统一执行所有特征的后处理与融合
+        
+        Args:
+            mix_repr: 基础特征，通常是声谱图特征 (B, C_spec, F, T)
+            feature_dict: compute_all 返回的字典 {name: raw_tensor}
+            
+        Returns:
+            fused_feat: 融合后的特征张量 (B, C_total, F, T)
+        """
+        # 1. 以 mix_repr 作为起始特征流
+        current_feat = mix_repr
+        
+        # 2. 遍历配置字典，而不是 feature_dict
+        # 理由：字典是无序的(Python 3.6+虽有序但不可靠)，配置字典定义了拼接的“标准顺序”
+        feat_cfg = self.config['features']
+        
+        for name in feat_cfg:
+            sub_cfg = feat_cfg[name]
+            
+            # 跳过未启用的配置
+            if not sub_cfg.get('enabled', False):
+                continue
+            
+            # 防御性编程：确保模块存在且计算出了数据
+            if name in self.features and name in feature_dict:
+                module = self.features[name]
+                raw_data = feature_dict[name]
+                
+                # [关键步骤] 链式调用 post
+                # CycEncoder.post 会自动处理 F 维广播
+                # 其他 Feature.post 会自动处理常规 Concat
+                current_feat = module.post(current_feat, raw_data)
+        
+        return current_feat

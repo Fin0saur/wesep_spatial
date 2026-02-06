@@ -42,6 +42,13 @@ class TSE_NBC2_SPATIAL(nn.Module):
                 "cdf": {"enabled": True},
                 "sdf": {"enabled": True},
                 "delta_stft": {"enabled": True},
+                "cyc_doaemb":{
+                    "enabled": True,
+                    "cyc_alpha": 20,
+                    "cyc_dimension": 40,
+                    "use_ele": True,
+                    "out_channel": 1
+                }
             }
         }
         self.spatial_configs = deep_update(spatial_configs, config.get('spatial', {}))
@@ -56,6 +63,7 @@ class TSE_NBC2_SPATIAL(nn.Module):
         if feat_cfg.get('cdf', {}).get('enabled', False): spatial_dim += n_pairs
         if feat_cfg.get('sdf', {}).get('enabled', False): spatial_dim += n_pairs
         if feat_cfg.get('delta_stft', {}).get('enabled', False): spatial_dim += 2*n_pairs
+        if feat_cfg.get('cyc_doaemb',{}).get('enabled',False): spatial_dim += feat_cfg['cyc_doaemb']['out_channel']
         
         total_input_size = spec_feat_dim + spatial_dim
         # print(f"Dynamic Input Size: {total_input_size}") # Debug用
@@ -63,7 +71,7 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # --- 4. Backbone Configs ---
         block_kwargs = {
             'n_heads': 2,
-            # 'dropout': 0.0,
+            'dropout': 0.1,
             'conv_kernel_size': 3,
             'n_conv_groups': 8,
             'norms': ("LN", "GBN", "GBN"),
@@ -123,16 +131,8 @@ class TSE_NBC2_SPATIAL(nn.Module):
         
         # Spatial: (B, 16, F, T)
         spatial_feat_dict = self.spatial_ft.compute_all(Y_norm,azi_rad, ele_rad)
-        spatial_feat_list = []
-        for name, feat in spatial_feat_dict.items():
-            if name in self.spatial_configs["features"]:
-                spatial_feat_list.append(feat)
-        if len(spatial_feat_list) == 0:
-            raise RuntimeError("No spatial features enabled or computed!")
-        
-        spatial_feat = torch.cat(spatial_feat_list, dim=1)
-        # --- Fusion ---
-        features = torch.cat([spec_feat, spatial_feat], dim=1)
+
+        features = self.spatial_ft.post_all(spec_feat, spatial_feat_dict)
         
         # --- Backbone ---
         est_spec_feat_raw = self.sep_model(features)
