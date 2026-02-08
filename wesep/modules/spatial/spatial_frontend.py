@@ -14,7 +14,7 @@ class BaseSpatialFeature(nn.Module):
         super().__init__()
         self.config=config
         self.default_pairs = config.get('pairs', None)
-        if geometry_ctx != None:
+        if geometry_ctx is not None:
             self.register_buffer('mic_pos', geometry_ctx['mic_pos'])
             self.register_buffer('omega_over_c', geometry_ctx['omega_over_c'])
 
@@ -65,6 +65,7 @@ class CycEncoder(BaseSpatialFeature):
         self.alpha = enc_cfg.get('cyc_alpha', 1.0) # e.g., 20
         self.enabled = enc_cfg['enabled']
         self.use_ele = enc_cfg.get('use_ele', False) # 获取是否使用俯仰角的开关
+        self.fusion = enc_cfg.get('fusion',"concat")
         out_channels = enc_cfg['out_channel']
         
         # 2. 核心组件: Cyclic Positional Encoding
@@ -101,7 +102,7 @@ class CycEncoder(BaseSpatialFeature):
         
         if azi.dim() == 1:
             azi = azi.unsqueeze(1) # (B,) -> (B, 1)
-        if ele != None and ele.dim() == 1:
+        if ele is not None and ele.dim() == 1:
             ele = ele.unsqueeze(1)
         
         enc_feat = self.cyc_pos(azi)
@@ -131,26 +132,39 @@ class CycEncoder(BaseSpatialFeature):
         
         return spatial_repr
 
-    def post(self, mix_repr, spatial_repr):
+def post(self, mix_repr, spatial_repr):
         """
         Args:
-            mix_repr: (B, C_mix, F, T)  <-- 也就是 (Batch, Channel, 257, Time)
-            spatial_repr: (B, C_enc, 1, T) 或 (B, C_enc, 1, 1)
+            mix_repr: (B, C_mix, F, T)   <-- 主干特征，例如 (Batch, 192, 257, 100)
+            spatial_repr: (B, C_enc, 1, T) <-- DOA特征，例如 (Batch, 192, 1, 100)
         Returns:
-            Fused feature: (B, C_mix + C_enc, F, T)
+            Fused feature: (B, C_out, F, T)
         """
         if spatial_repr is None:
             return mix_repr
             
-        # 1. 获取主干网络特征的目标形状 (F 和 T)
-        target_F = mix_repr.shape[2]
-        target_T = mix_repr.shape[3]
-        
-        # 2. 双重广播 (Broadcast)
-        spatial_repr_expanded = spatial_repr.expand(-1, -1, target_F, target_T)
-        
-        # 3. 拼接 (Concat)
-        out = torch.cat([mix_repr, spatial_repr_expanded], dim=1)
+        # 1. 拼接融合 (Concat)
+        if self.fusion == "concat":
+            target_F = mix_repr.shape[2]
+            target_T = mix_repr.shape[3]
+            spatial_repr_expanded = spatial_repr.expand(-1, -1, target_F, target_T)
+            out = torch.cat([mix_repr, spatial_repr_expanded], dim=1)
+            
+        elif self.fusion == "multiply":
+            if mix_repr.shape[1] != spatial_repr.shape[1]:
+                raise ValueError(
+                    f"Fusion 'multiply' requires same channel dimensions. "
+                    f"Mix: {mix_repr.shape[1]}, Spatial: {spatial_repr.shape[1]}. "
+                    f"Please check config['out_channel']."
+                )
+            
+            # 执行广播乘法
+            # PyTorch 会自动处理广播: (B, C, F, T) * (B, C, 1, T) -> (B, C, F, T)
+            # 物理含义：同一个时刻 T，DOA特征对该时刻下所有的频率 F 施加相同的权重
+            out = mix_repr * spatial_repr
+            
+        else:
+            out = mix_repr
         
         return out
 

@@ -14,7 +14,6 @@ class TSE_NBC2_SPATIAL(nn.Module):
         self.win = config.get("win",512)
         self.stride = config.get("stride",256)
         
-        # [优化] 使用 register_buffer 自动管理设备，无需在 forward 中 .to(device)
         self.window = torch.hann_window(self.win)
         
         freq_bins = self.win // 2 + 1
@@ -47,7 +46,8 @@ class TSE_NBC2_SPATIAL(nn.Module):
                     "cyc_alpha": 20,
                     "cyc_dimension": 40,
                     "use_ele": True,
-                    "out_channel": 1
+                    "out_channel": 1, 
+                    "fusion": "concat" # concat or multiply
                 }
             }
         }
