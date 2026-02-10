@@ -118,27 +118,6 @@ def sample_fixed_spatial_cue(
             
             
             spatial_vec = np.array(feats, dtype=np.float32) 
-            
-            # print("Remain to be calculated")
-            # exit()
-            # enroll_item = items[0]
-            # print(enroll_item)
-
-            # wav_path = enroll_item["path"]
-
-            # try:
-            #     print("Remain to be calculated")
-            #     exit()
-            #     # enrollment, sr = sf.read(wav_path)
-            # except Exception as e:
-            #     logging.warning(
-            #         f"Failed to obatin the spatial cues: {wav_path}, err={e}")
-            #     if required:
-            #         raise
-            #     continue
-
-            # if enrollment.ndim == 1:
-            #     enrollment = np.expand_dims(enrollment, axis=0)
             sample[f"spatial_{slot}"] = spatial_vec
 
         if scope == "utterance":

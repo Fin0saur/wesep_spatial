@@ -21,7 +21,6 @@ class TSE_NBC2_SPATIAL_EMB(nn.Module):
         # --- 2. Spatial Configs ---
         spatial_configs = {
             "geometry": {
-                # [关键] 确保这里的 n_fft 与 STFT 实际使用的参数一致
                 "n_fft": self.win,              
                 "fs": 16000,
                 "c": 343.0,
@@ -70,7 +69,6 @@ class TSE_NBC2_SPATIAL_EMB(nn.Module):
                 spatial_dim += 0
         
         total_input_size = spec_feat_dim + spatial_dim
-        # print(f"Dynamic Input Size: {total_input_size}") # Debug用
 
         # --- 4. Backbone Configs ---
         block_kwargs = {
@@ -86,8 +84,8 @@ class TSE_NBC2_SPATIAL_EMB(nn.Module):
         }
         
         sep_configs = dict(
-            input_size=total_input_size, # 使用动态计算的值
-            output_size=2, # 假设 NBC2 内部处理这里代表输出 mask 或 complex
+            input_size=total_input_size, 
+            output_size=2, 
             n_layers=8,
             dim_hidden=96,
             dim_ffn=96*2,
@@ -106,12 +104,9 @@ class TSE_NBC2_SPATIAL_EMB(nn.Module):
         
     def forward(self, mix,cue):
         # input shape: (B, C, T)
-        # self.window 已经在正确的 device 上了
         spatial_cue=cue[0]      
         B, M, T_wav = mix.shape
         self.window = self.window.to(mix.device)
-        # print(f"mix_shape:{mix.shape}")
-        # print(f"azimuth:{azi_rad},elerad:{ele_rad}")
         mix_reshape = mix.view(B * M, T_wav)
         
         spec = torch.stft(
@@ -135,31 +130,15 @@ class TSE_NBC2_SPATIAL_EMB(nn.Module):
         
         x = self.sep_model.encoder(spec_feat)
         
-        # 2. 迭代式交互 (Loop with Interaction)
-        # 同时遍历每一层的 Block 和 每一层的 Clue Encoder
         for block, clue_enc in zip(self.sep_model.sa_layers, self.clue_encoders):
             
-            # A. 计算当前层的 DOA Embedding
-            # Output: (B, Hidden, 1, T)
             doa_emb = clue_enc.compute(azi=spatial_cue[:, 0], ele=spatial_cue[:, 1])
             
-            # B. 执行融合 (DSENet: Element-wise Multiply)
-            # 这里利用广播机制: (B, H, F, T) * (B, H, 1, T) -> (B, H, F, T)
-            # 无需任何手动 reshape/view，非常清爽
             if doa_emb is not None:
                 x = clue_enc.post(x,doa_emb)
-            
-            # C. 通过当前层 Block
-            # Input: (B, H, F, T) -> Output: (B, H, F, T)
             x, _ = block(x)
             
-        # 3. 解码 (Decoder)
-        # Input: (B, Hidden, F, T) -> Output: (B, Out, F, T)
         est_spec_feat = self.sep_model.decoder(x)
-        # --- Reconstruction ---
-        # r = est_spec_feat[:, 0].float()
-        # i = est_spec_feat[:, 1].float()
-        # est_spec = torch.complex(r, i)
         est_spec = torch.complex(est_spec_feat[:, 0], est_spec_feat[:, 1])
         
         # Inverse Normalization

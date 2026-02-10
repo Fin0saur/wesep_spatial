@@ -21,7 +21,6 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # --- 2. Spatial Configs ---
         spatial_configs = {
             "geometry": {
-                # [关键] 确保这里的 n_fft 与 STFT 实际使用的参数一致
                 "n_fft": self.win,              
                 "fs": 16000,
                 "c": 343.0,
@@ -66,7 +65,6 @@ class TSE_NBC2_SPATIAL(nn.Module):
         if feat_cfg.get('cyc_doaemb',{}).get('enabled',False): spatial_dim += feat_cfg['cyc_doaemb']['out_channel']
         
         total_input_size = spec_feat_dim + spatial_dim
-        # print(f"Dynamic Input Size: {total_input_size}") # Debug用
 
         # --- 4. Backbone Configs ---
         block_kwargs = {
@@ -82,8 +80,8 @@ class TSE_NBC2_SPATIAL(nn.Module):
         }
         
         sep_configs = dict(
-            input_size=total_input_size, # 使用动态计算的值
-            output_size=2, # 假设 NBC2 内部处理这里代表输出 mask 或 complex
+            input_size=total_input_size,
+            output_size=2,
             n_layers=8,
             dim_hidden=96,
             dim_ffn=96*2,
@@ -93,21 +91,15 @@ class TSE_NBC2_SPATIAL(nn.Module):
         
         # --- 5. Instantiate Modules ---
         self.sep_model = NBC2(**self.sep_configs)
-        
-        # 通常 SpatialFrontend 在 init 时就需要 config，forward 时不应该再传 config
-        # 如果你的 SpatialFrontend forward 需要 config，保持原样即可
         self.spatial_ft = SpatialFrontend(self.spatial_configs)
         
     def forward(self, mix,cue):
         # input shape: (B, C, T)
-        # self.window 已经在正确的 device 上了
         spatial_cue=cue[0]
         azi_rad = spatial_cue[:, 0]
         ele_rad = spatial_cue[:, 1]        
         B, M, T_wav = mix.shape
         self.window = self.window.to(mix.device)
-        # print(f"mix_shape:{mix.shape}")
-        # print(f"azimuth:{azi_rad},elerad:{ele_rad}")
         mix_reshape = mix.view(B * M, T_wav)
         
         spec = torch.stft(
