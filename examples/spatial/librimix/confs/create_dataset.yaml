@@ -1,3 +1,5 @@
+# require gpuRIR
+
 audio:
   sr: 16000
   duration: 4.0 
@@ -9,13 +11,13 @@ array:
     - [0.0166, 0.0, 0.0]  # Mic 3 (approx -0.05 + 0.2/3)
     - [0.05, 0.0, 0.0]    # Mic 4
 room:
-  dimensions:
+  dimensions: # Room shape
     min: [3, 3, 2.5]
     max: [10, 10, 4]
   rt60:
     min: 0.1
     max: 0.5
-  simulation:
+  simulation: # distance restrict
     max_attempts: 200
     dist_range: [0.5, 5.0]
 
@@ -28,7 +30,7 @@ dataset:
   paths:
     librispeech: "/data0/import/asr/LibriSpeech"
     noise: "/data1/yxy05/Nonspeech"
-    output: "/data1/yxy05/Spatial_librimix/wav16k/min"
+    output: "/data1/yxy05/Spatial_librimix_ttst/wav16k/min"
   splits:
     train: "train-clean-100"
     dev: "dev-clean"
