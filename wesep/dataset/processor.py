@@ -179,7 +179,7 @@ def tar_file_and_group_single_spk(data):
         sample["stream"].close()
 
 
-def parse_raw(data, mc_target):
+def parse_raw(data):
     """Parse samples.jsonl line into wav tensors.
 
     Args:
@@ -264,13 +264,13 @@ def parse_raw(data, mc_target):
             wav_list = [w[..., :min_len] for w in wav_list]
 
         # stack into (C, T)
-        
         if len(wav_list) == 1:
             wav_mix = wav_list[0]
             if wav_mix.dim() == 1:
                 wav_mix = wav_mix.unsqueeze(0)  # To avoid additional dimension
         else:
             wav_mix = torch.stack(wav_list, dim=0)
+        #########################
 
         example = {
             "key": key,
@@ -305,13 +305,9 @@ def parse_raw(data, mc_target):
                                 f"mix={sample_rate}, src={sr}")
 
             example[f"spk{i}"] = spk_id
-            if not mc_target:
-                example[
-                    f"wav_spk{i}"] = wav_spk[:
-                                            1, :]  # Only obtain the first channel as target
-            else :
-                example[
-                    f"wav_spk{i}"] = wav_spk  # obtain all channel
+            example[
+                f"wav_spk{i}"] = wav_spk[:
+                                         1, :]  # Only obtain the first channel as target
         yield example
 
 

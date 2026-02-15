@@ -153,12 +153,11 @@ def Dataset(
     lists = read_lists(data_list_file)
     shuffle = configs.get("shuffle", False)
     online_mix = configs.get("online_mix", False)
-    mc_target = configs.get("mc_target", False) # read multi-channel target speech
 
     dataset = DataList(lists, shuffle=shuffle, repeat_dataset=repeat_dataset)
 
     # 1) Source layer
-    dataset = build_source_layer(dataset, data_type, online_mix, mc_target)
+    dataset = build_source_layer(dataset, data_type, online_mix)
 
     # 2) Basic audio preprocessing
     dataset = build_audio_base_layer(dataset, configs, state, online_mix)
@@ -174,7 +173,7 @@ def Dataset(
     return dataset
 
 
-def build_source_layer(dataset, data_type, online_mix, mc_target=False):
+def build_source_layer(dataset, data_type, online_mix):
     # 1) Source layer
     if data_type == "shard":
         dataset = Processor(dataset, processor.url_opener)
@@ -185,7 +184,7 @@ def build_source_layer(dataset, data_type, online_mix, mc_target=False):
                                 processor.tar_file_and_group_single_spk)
     else:
         if not online_mix:
-            dataset = Processor(dataset, processor.parse_raw, mc_target)
+            dataset = Processor(dataset, processor.parse_raw)
         else:
             dataset = Processor(dataset, processor.parse_raw_single_spk)
     return dataset

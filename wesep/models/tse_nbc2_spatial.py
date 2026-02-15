@@ -45,8 +45,8 @@ class TSE_NBC2_SPATIAL(nn.Module):
                     "cyc_alpha": 20,
                     "cyc_dimension": 40,
                     "use_ele": True,
-                    "out_channel": 1,
-                    "fusion_type": "concat" # concat or multiply
+                    "out_channel": 1, # only use when concat
+                    "fusion_type": "multiply" # concat or multiply
                 }
             }
         }
@@ -62,8 +62,11 @@ class TSE_NBC2_SPATIAL(nn.Module):
         if feat_cfg.get('cdf', {}).get('enabled', False): spatial_dim += n_pairs
         if feat_cfg.get('sdf', {}).get('enabled', False): spatial_dim += n_pairs
         if feat_cfg.get('delta_stft', {}).get('enabled', False): spatial_dim += 2*n_pairs
-        if feat_cfg.get('cyc_doaemb',{}).get('enabled',False): spatial_dim += feat_cfg['cyc_doaemb']['out_channel']
-        
+        if feat_cfg.get('cyc_doaemb',{}).get('enabled',False): 
+            if feat_cfg.get('cyc_doaemb',{}).get('fusion_type') == "concat":
+                spatial_dim += feat_cfg['cyc_doaemb']['out_channel']
+            elif feat_cfg.get('cyc_doaemb',{}).get('fusion_type') == "multiply":
+                feat_cfg['cyc_doaemb']['out_channel'] = 96 # dim_hidden    
         total_input_size = spec_feat_dim + spatial_dim
 
         # --- 4. Backbone Configs ---
@@ -98,6 +101,7 @@ class TSE_NBC2_SPATIAL(nn.Module):
         spatial_cue=cue[0]
         azi_rad = spatial_cue[:, 0]
         ele_rad = spatial_cue[:, 1]        
+        
         B, M, T_wav = mix.shape
         self.window = self.window.to(mix.device)
         mix_reshape = mix.view(B * M, T_wav)
@@ -124,10 +128,32 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # Spatial: (B, 16, F, T)
         spatial_feat_dict = self.spatial_ft.compute_all(Y_norm,azi_rad, ele_rad)
 
-        features = self.spatial_ft.post_all(spec_feat, spatial_feat_dict)
+        # features = self.spatial_ft.post_all(spec_feat, spatial_feat_dict) 
+        features = spec_feat
         
+        if self.spatial_configs['features']['ipd']['enabled'] :
+            features=self.spatial_ft.features['ipd'].post(features,spatial_feat_dict['ipd'])
+        
+        if self.spatial_configs['features']['cdf']['enabled'] :
+            features=self.spatial_ft.features['cdf'].post(features,spatial_feat_dict['cdf'])
+        
+        if self.spatial_configs['features']['sdf']['enabled']:
+            features=self.spatial_ft.features['sdf'].post(features,spatial_feat_dict['sdf'])
+        
+        if self.spatial_configs['features']['delta_stft']['enabled']:
+            features=self.spatial_ft.features['delta_stft'].post(features,spatial_feat_dict['delta_stft'])
+        
+        if self.spatial_configs['features']['cyc_doaemb']['enabled'] and self.spatial_configs['features']['cyc_doaemb']['fusion_type'] == 'concat':
+            features=self.spatial_ft.features['cyc_doaemb'].post(features,spatial_feat_dict['cyc_doaemb'])
+            
         # --- Backbone ---
-        est_spec_feat = self.sep_model(features)
+        encode_features = self.sep_model.encoder(features)
+        for m in self.sep_model.sa_layers:
+            if self.spatial_configs['features']['cyc_doaemb']['enabled'] and self.spatial_configs['features']['cyc_doaemb']['fusion_type'] == 'multiply':
+                encode_features=self.spatial_ft.features['cyc_doaemb'].post(encode_features,spatial_feat_dict['cyc_doaemb'])
+            encode_features , _ = m(encode_features)
+        
+        est_spec_feat = self.sep_model.decoder(encode_features)
         
         est_spec = torch.complex(est_spec_feat[:, 0], est_spec_feat[:, 1])
         
@@ -146,3 +172,4 @@ class TSE_NBC2_SPATIAL(nn.Module):
         est_wav=est_wav.unsqueeze(1) # [B 1 T]
         
         return est_wav
+    

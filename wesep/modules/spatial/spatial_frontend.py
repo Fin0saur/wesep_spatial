@@ -52,7 +52,7 @@ class CycEncoder(BaseSpatialFeature):
         self.alpha = enc_cfg.get('cyc_alpha', 1.0) # e.g., 20
         self.enabled = enc_cfg['enabled']
         self.use_ele = enc_cfg.get('use_ele', False) 
-        self.fusion = enc_cfg.get('fusion',"concat")
+        self.fusion = enc_cfg.get('fusion_type',"concat")
         out_channels = enc_cfg['out_channel']
         
         self.cyc_pos = CycPosEncoding(embed_dim=self.embed_dim, alpha=self.alpha)
@@ -107,7 +107,6 @@ class CycEncoder(BaseSpatialFeature):
         if spatial_repr is None:
             return mix_repr
             
-        # 1. 拼接融合 (Concat)
         if self.fusion == "concat":
             target_F = mix_repr.shape[2]
             target_T = mix_repr.shape[3]
@@ -125,7 +124,6 @@ class CycEncoder(BaseSpatialFeature):
 
         return out
 
-
 class IPDFeature(BaseSpatialFeature):
     def compute(self, Y, azi, ele, pairs=None):
         target_pairs = self._get_pairs(pairs)
@@ -137,15 +135,6 @@ class IPDFeature(BaseSpatialFeature):
         return torch.stack(ipd_list, dim=1) # (B, N, F, T)
 
     def post(self, mix_repr, spatial_repr):
-        return torch.cat([mix_repr, spatial_repr], dim=1)
-    
-class TPDFeature(BaseSpatialFeature):
-    def compute(self,Y,azi,ele,pairs=None):
-        target_pairs = self._get_pairs(pairs)
-        _, _, F_dim, _ = Y.shape
-        TPD = self._compute_tpd(azi, ele, F_dim, target_pairs)
-        return TPD
-    def post(self,mix_repr,spatial_repr):
         return torch.cat([mix_repr, spatial_repr], dim=1)
 
 class CDFFeature(BaseSpatialFeature):
@@ -224,13 +213,12 @@ class SpatialFrontend(nn.Module):
             },
             "pairs": [[0, 1], [1, 2], [2, 3], [0, 3]], 
             "features": {
-                "ipd": {"enabled": True},
-                "cdf": {"enabled": True},
-                "sdf": {"enabled": True},
-                "delta_stft": {"enabled": True},
-                "tpd": {"enabled": False},
+                "ipd": {"enabled": False},
+                "cdf": {"enabled": False},
+                "sdf": {"enabled": False},
+                "delta_stft": {"enabled": False},
                 "cyc_doaemb":{
-                    "enabled": True,
+                    "enabled": False,
                     "cyc_alpha": 20,
                     "cyc_dimension": 40,
                     "use_ele": True,

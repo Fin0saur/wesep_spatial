@@ -1,5 +1,5 @@
 dataloader_args:
-  batch_size: 4 #RTX2080 1, V100: 8, A800: 16
+  batch_size: 3 #RTX2080 1, V100: 8, A800: 16
   drop_last: true
   num_workers: 12
   pin_memory: true
@@ -67,11 +67,13 @@ model_args:
         ipd: 
           enabled: True        
         cdf: 
-          enabled: True        
+          enabled: True       
         sdf: 
-          enabled: True        
+          enabled: False        
         delta_stft: 
-          enabled: True
+          enabled: False
+        tpd:
+          enabled: False
 
 find_unused_parameters: False
 

@@ -1,8 +1,6 @@
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
+import numpy as np
 from wesep.modules.spatial.spatial_frontend import SpatialFrontend
 from wesep.modules.separator.bsrnn import (
     BandSplit, 
@@ -25,28 +23,21 @@ class TSE_BSRNN_SPATIAL(nn.Module):
                 "n_fft": self.win,              
                 "fs": self.sr,
                 "c": 343.0,
-                "mic_spacing": 0.03333333,
-                "mic_coords": [[-0.05, 0, 0], [-0.0166, 0, 0], [0.0166, 0, 0], [0.05, 0, 0]],
+                "mic_coords": [[-0.05, 0, 0], [-0.0166, 0, 0], [0.0166, 0, 0], [0.05, 0, 0]], 
             },
             "pairs": [[0, 1], [1, 2], [2, 3], [0, 3]],
             "features": {
-                "ipd": {"enabled": True},
-                "cdf": {"enabled": True},
-                "sdf": {"enabled": True},
-                "delta_stft": {"enabled": True},
-                "cyc_doaemb": {"enabled": False}
+                "ipd": {"enabled": True}, 
+                "cdf": {"enabled": True}
             }
         }
         self.spatial_configs = deep_update(spatial_configs, config.get('spatial', {}))
         self.spatial_ft = SpatialFrontend(self.spatial_configs)
         
-        n_pairs = len(self.spatial_configs['pairs'])
-        feat_cfg = self.spatial_configs['features']
-        self.spatial_dim = 0
-        if feat_cfg.get('ipd', {}).get('enabled', False): self.spatial_dim += n_pairs
-        if feat_cfg.get('cdf', {}).get('enabled', False): self.spatial_dim += n_pairs
-        if feat_cfg.get('sdf', {}).get('enabled', False): self.spatial_dim += n_pairs
-        if feat_cfg.get('delta_stft', {}).get('enabled', False): self.spatial_dim += 2 * n_pairs
+        self.pairs = self.spatial_configs['pairs']
+        self.mic_pos = torch.tensor(self.spatial_configs['geometry']['mic_coords'])
+        self.c = self.spatial_configs['geometry']['c']
+        self.fs = self.spatial_configs['geometry']['fs']
         
         sep_cfg = config.get('separator', {})
         feature_dim = sep_cfg.get('feature_dim', 128)
@@ -58,17 +49,14 @@ class TSE_BSRNN_SPATIAL(nn.Module):
         bandwidth_100 = int(np.floor(100 / (self.sr / 2.0) * enc_dim))
         bandwidth_200 = int(np.floor(200 / (self.sr / 2.0) * enc_dim))
         bandwidth_500 = int(np.floor(500 / (self.sr / 2.0) * enc_dim))
-        bandwidth_2k = int(np.floor(2000 / (self.sr / 2.0) * enc_dim))
-
-        band_width = [bandwidth_100] * 15
-        band_width += [bandwidth_200] * 10
-        band_width += [bandwidth_500] * 5
-        band_width += [bandwidth_2k] * 1
-        band_width.append(enc_dim - int(np.sum(band_width)))
+        band_width = [bandwidth_100]*10 + [bandwidth_200]*10 + [bandwidth_500]*5
+        band_width.append(enc_dim - sum(band_width)) 
         
         self.nband = len(band_width)
-        
         self.band_split = BandSplit(band_width)
+
+        n_pairs = len(self.pairs)
+
         self.spec_norm = SubbandNorm(
             band_width=band_width,
             spec_dim=2,
@@ -76,25 +64,29 @@ class TSE_BSRNN_SPATIAL(nn.Module):
             feature_dim=feature_dim,
             norm_type=norm_type
         )
-        
-        if self.spatial_dim > 0:
-            self.spatial_norm = SubbandNorm(
-                band_width=band_width,
-                spec_dim=self.spatial_dim,
-                nband=self.nband,
-                feature_dim=feature_dim,
-                norm_type=norm_type
-            )
-        else:
-            self.spatial_norm = None
-            self.fusion_layer = None
+
+        self.ipd_norm = SubbandNorm(
+            band_width=band_width,
+            spec_dim=n_pairs,
+            nband=self.nband,
+            feature_dim=feature_dim,
+            norm_type=norm_type
+        )
+
+        self.dir_norm = SubbandNorm(
+            band_width=band_width,
+            spec_dim=n_pairs,
+            nband=self.nband,
+            feature_dim=feature_dim,
+            norm_type=norm_type
+        )
 
         self.separator = BSRNN_Separator(
             nband=self.nband,
             num_repeat=num_repeat,
             feature_dim=feature_dim,
-            causal=causal,
-            norm_type=norm_type
+            norm_type=norm_type,
+            causal=causal
         )
         
         self.band_masker = BandMasker(
@@ -106,70 +98,57 @@ class TSE_BSRNN_SPATIAL(nn.Module):
         )
 
     def forward(self, mix, cue):
+        """
+        mix: (B, M, T_wav)
+        cue: (B, 2) -> [azimuth, elevation] (弧度)
+        """
         B, M, T_wav = mix.shape
+        device = mix.device
         spatial_cue = cue[0]
         azi_rad = spatial_cue[:, 0]
-        ele_rad = spatial_cue[:, 1]
-        
+        ele_rad = spatial_cue[:, 1] 
+
+        # --- 1. STFT ---
         mix_reshape = mix.view(B * M, T_wav)
         spec = torch.stft(
-            mix_reshape,
-            n_fft=self.win,
-            hop_length=self.stride,
-            window=self.window.to(mix.device),
-            return_complex=True
+            mix_reshape, n_fft=self.win, hop_length=self.stride, 
+            window=self.window.to(device), return_complex=True
         )
         _, F_dim, T_dim = spec.shape
-        Y = spec.view(B, M, F_dim, T_dim) # (B, M, F, T) Complex
+        Y = spec.view(B, M, F_dim, T_dim)
         
-        # --- 2. Reference & Norm ---
-        Y_ref = Y[:, 0] 
+        Y_ref = Y[:, 0]
         ref_mag_mean = torch.abs(Y_ref).mean(dim=(1, 2), keepdim=True) + 1e-8
         Y_norm = Y / ref_mag_mean.unsqueeze(1)
+
+        spec_feat = torch.stack([Y_norm[:, 0].real, Y_norm[:, 0].imag], dim=1) 
         
-        # --- 3. Feature Preparation (Dual Stream) ---
+        spatial_dict = self.spatial_ft.compute_all(Y_norm, azi_rad, ele_rad)
+        ipd_feat = spatial_dict['ipd'] 
+        cdf_feat = spatial_dict['cdf']
         
-        # Stream 1: Spectral (B, 2, F, T)
-        spec_feat = torch.stack([Y_norm[:, 0].real, Y_norm[:, 0].imag], dim=1)
-        subband_spec = self.band_split(spec_feat)
-        # Projection: (B, Nband, Dim, T)
-        spec_emb = self.spec_norm(subband_spec)
+        sub_spec = self.band_split(spec_feat)
+        emb_spec = self.spec_norm(sub_spec) 
         
-        # Stream 2: Spatial (B, SpatialDim, F, T)
-        if self.spatial_dim > 0:
-            spatial_feat_dict = self.spatial_ft.compute_all(Y_norm, azi_rad, ele_rad)
-            spatial_feat_list = []
-            for name, feat in spatial_feat_dict.items():
-                if name in self.spatial_configs["features"]:
-                    spatial_feat_list.append(feat)
-            
-            spatial_feat = torch.cat(spatial_feat_list, dim=1)
-            subband_spatial = self.band_split(spatial_feat)
-            # Projection: (B, Nband, Dim, T)
-            spatial_emb = self.spatial_norm(subband_spatial)
-            input_emb = spec_emb + spatial_emb
-        else:
-            # Fallback for no spatial features
-            input_emb = spec_emb
-            
-        # --- 5. Backbone Separation ---
-        sep_output = self.separator(input_emb)
+        sub_ipd = self.band_split(ipd_feat)
+        emb_ipd = self.ipd_norm(sub_ipd)    
         
-        # --- 6. Masking ---
-        subband_mix_spec = self.band_split(Y[:, 0]) 
+        sub_cdf = self.band_split(cdf_feat)
+        emb_cdf = self.dir_norm(sub_cdf)   
+
+        input_emb = emb_spec + emb_ipd + emb_cdf
         
-        est_spec_RI = self.band_masker(sep_output, subband_mix_spec)
+        sep_out = self.separator(input_emb)
         
-        # --- 7. Reconstruction ---
+        subband_mix = self.band_split(Y[:, 0])
+        est_spec_RI = self.band_masker(sep_out, subband_mix)
+        
         est_complex = torch.complex(est_spec_RI[:, 0], est_spec_RI[:, 1])
         est_complex = est_complex * ref_mag_mean.unsqueeze(1)
         
         est_wav = torch.istft(
-            est_complex.squeeze(1),
-            n_fft=self.win,
-            hop_length=self.stride,
-            window=self.window.to(mix.device),
-            length=T_wav
+            est_complex.squeeze(1), n_fft=self.win, hop_length=self.stride, 
+            window=self.window.to(device), length=T_wav
         )
         
         return est_wav.unsqueeze(1)
