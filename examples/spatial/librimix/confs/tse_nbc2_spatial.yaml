@@ -1,5 +1,5 @@
 dataloader_args:
-  batch_size: 3 #RTX2080 1, V100: 8, A800: 16
+  batch_size: 1 #RTX2080 1, V100: 8, A800: 16
   drop_last: true
   num_workers: 12
   pin_memory: true
@@ -22,31 +22,34 @@ dataset_args:
   cue_processing:
     spatial:
 
-enable_amp: false
-exp_dir: exp/BSRNN
+enable_amp: False
+exp_dir: exp/tse_nbc2_spatial_all
 gpus: '0,1'
 log_batch_interval: 100
 
 loss: SISDR
 loss_args: { }
-
-# loss: [SISDR, XX]               ### Put SISDR in the first position for validation set
+whole_utt: True
+# loss: [SISDR, CE]               ### For joint training the speaker encoder with CE loss. Put SISDR in the first position for validation set
 # loss_args:
 #   loss_posi: [[0],[1]]
 #   loss_weight: [[1.0],[1.0]]
 
 model:
-  tse_model: TSE_BSRNN_SPATIAL
+  tse_model: TSE_NBC2_SPATIAL
 model_args:
-  tse_model:        
-    win: 512
-    stride: 128  
+  tse_model:
+    win: 512         
+    stride: 256      
     separator:
-      sr: 16000
-      feature_dim: 128
-      num_repeat: 6
-      causal: False
-      nspk: 1
+      n_layers: 8          
+      dim_hidden: 96       
+      dim_ffn: 192        
+      block_kwargs:
+        n_heads: 2
+        dropout: 0.1
+        conv_kernel_size: 3
+        n_conv_groups: 8
     spatial:
       geometry:
         fs: 16000
@@ -69,13 +72,18 @@ model_args:
         cdf: 
           enabled: True       
         sdf: 
-          enabled: False        
+          enabled: True       
         delta_stft: 
-          enabled: False
-        tpd:
-          enabled: False
+          enabled: True
+        cyc_doaemb:
+          enabled: True
+          cyc_alpha: 20
+          cyc_dimension: 40
+          use_ele: True
+          out_channel: 1          
+          fusion_type: multiply
 
-find_unused_parameters: False
+# find_unused_parameters: True
 
 model_init:
   tse_model: null

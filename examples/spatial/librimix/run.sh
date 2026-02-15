@@ -14,13 +14,14 @@ fs=16k
 min_max=min
 noise_type="clean"
 data_type="raw" # shard/raw
-Libri2Mix_dir=/zhangke/zk/wesep_update/wesep_wenet/examples/spatial/librimix/data/librimix/Libri2Mix_spatial #/YourPATH/librimix/Libri2Mix_spatial
+Libri2Mix_dir=/root/Spatial_librimix #/YourPATH/librimix/Libri2Mix_spatial
 mix_data_path="${Libri2Mix_dir}/wav${fs}/${min_max}"
 
 # Training related
-gpus="[0]"
-config=confs/tse_bsrnn_spatial.yaml
-exp_dir=exp/TSE_BSRNN_Spatial
+gpus="[0,1,2,3,4,5]"
+config=confs/tse_nbc2_spatial.yaml
+data_config=confs/create_dataset.yaml
+exp_dir=exp/TSE_nbc2_test_all
 if [ -z "${config}" ] && [ -f "${exp_dir}/config.yaml" ]; then
   config="${exp_dir}/config.yaml"
 fi
@@ -39,18 +40,25 @@ num_avg=10
 
 . tools/parse_options.sh || exit 1
 
+
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
+  echo "Generate datasets ..."
+  python ./local/create_dataset_spatial.py --config ${data_config} \
+    --stage "all"
+fi
+
+if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
   echo "Prepare datasets ..."
-  ./local/prepare_data.sh --mix_data_path ${mix_data_path} \
+  ./local/prepare_data.sh --mix_data_path ${mix_data_path} \ 
     --data ${data} \
     --noise_type ${noise_type} \
-    --stage 2 \
+    --stage 1 \
     --stop-stage 2
 fi
 
 data=${data}/${noise_type}
 
-# if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ] && [ "${datatype}" = "shard" ]; then
+# if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ] && [ "${datatype}" = "shard" ]; then
 #   echo "Making shards from samples.jsonl ..."
 #   for dset in train-100 dev test; do
 #   #  for dset in train-360; do
@@ -65,7 +73,7 @@ data=${data}/${noise_type}
 #   done
 # fi
 
-if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
+if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
   echo "Start training ..."
   num_gpus=$(echo $gpus | awk -F ',' '{print NF}')
   if [ -z "${checkpoint}" ] && [ -f "${exp_dir}/models/latest_checkpoint.pt" ]; then
@@ -88,7 +96,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     ${checkpoint:+--checkpoint $checkpoint}
 fi
 
-if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
+if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   echo "Do model average ..."
   avg_model=$exp_dir/models/avg_best_model.pt
   python wesep/bin/average_model.py \
@@ -102,7 +110,7 @@ if [ -z "${checkpoint}" ] && [ -f "${exp_dir}/models/avg_best_model.pt" ]; then
   checkpoint="${exp_dir}/models/avg_best_model.pt"
 fi
 
-if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
+if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
   echo "Start inferencing ..."
   python wesep/bin/infer.py --config $config \
     --fs ${fs} \
@@ -116,7 +124,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     ${checkpoint:+--checkpoint $checkpoint}
 fi
 
-if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
+if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
   echo "Start scoring ..."
   ./tools/score.sh --dset "${data}/test" \
     --exp_dir "${exp_dir}" \

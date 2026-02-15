@@ -264,7 +264,12 @@ def parse_raw(data):
             wav_list = [w[..., :min_len] for w in wav_list]
 
         # stack into (C, T)
-        wav_mix = torch.stack(wav_list, dim=0)
+        if len(wav_list) == 1:
+            wav_mix = wav_list[0]
+            if wav_mix.dim() == 1:
+                wav_mix = wav_mix.unsqueeze(0)  # To avoid additional dimension
+        else:
+            wav_mix = torch.stack(wav_list, dim=0)
         #########################
 
         example = {

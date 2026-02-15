@@ -44,14 +44,14 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     out_dir="${real_data}/${noise_type}/${dset}/cues"
     mkdir -p "${out_dir}"
 
-    # 1) Generate cues/speech.json
+    # 1) Generate cues/spatial.json
     spatial_root=${mix_data_path}/${dset}/spatial
     python local/build_spatial_cues.py \
       --samples_jsonl "${mix_index}" \
       --spatial_root "${spatial_root}" \
       --outfile "${out_dir}/spatial.json"
 
-    # 2) Generate cues.yaml
+    # 2) Generate cues.yaml  add spatial_fields  
 cat > ${data}/${noise_type}/${dset}/cues.yaml << EOF
 cues:
   spatial:
@@ -62,6 +62,7 @@ cues:
       type: fixed
       key: mix_spk_id
       resource: ${data}/${noise_type}/${dset}/cues/spatial.json
+    spatial_fields: ["azimuth","elevation"]  
 EOF
   done
 fi
