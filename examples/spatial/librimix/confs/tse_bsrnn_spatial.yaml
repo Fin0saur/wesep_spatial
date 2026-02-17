@@ -69,11 +69,17 @@ model_args:
         cdf: 
           enabled: True       
         sdf: 
-          enabled: False        
+          enabled: True       
         delta_stft: 
-          enabled: False
-        tpd:
-          enabled: False
+          enabled: True
+        cyc_doaemb:
+          enabled: True
+          cyc_alpha: 20
+          cyc_dimension: 40
+          use_ele: True
+          out_channel: 1          
+          fusion_type: multiply
+      full_input: False
 
 find_unused_parameters: False
 

@@ -50,8 +50,7 @@ class TSE_BSRNN_SPATIAL(nn.Module):
             }
         }
         self.spatial_configs = deep_update(spatial_configs, config.get('spatial', {}))
-        self.spatial_ft = SpatialFrontend(self.spatial_configs)
-        
+      
         self.pairs = self.spatial_configs['pairs']
         self.mic_pos = torch.tensor(self.spatial_configs['geometry']['mic_coords'])
         self.c = self.spatial_configs['geometry']['c']
@@ -76,14 +75,25 @@ class TSE_BSRNN_SPATIAL(nn.Module):
         n_pairs = len(self.pairs)
 
         feat_cfg = self.spatial_configs['features']
+        full_input = self.spatial_configs['full_input']
+        
         self.bandnorm = nn.ModuleDict()
-        self.bandnorm['spec'] = SubbandNorm(
-            band_width=band_width,
-            spec_dim=n_pairs,
-            nband=self.nband,
-            feature_dim=feature_dim,
-            norm_type=norm_type
-        )
+        if full_input:
+            self.bandnorm['spec'] = SubbandNorm(
+                band_width=band_width,
+                spec_dim=n_pairs,
+                nband=self.nband,
+                feature_dim=feature_dim,
+                norm_type=norm_type
+            )            
+        else:
+            self.bandnorm['spec'] = SubbandNorm(
+                band_width=band_width,
+                spec_dim=2,
+                nband=self.nband,
+                feature_dim=feature_dim,
+                norm_type=norm_type
+            )
         
         if feat_cfg.get('ipd', {}).get('enabled', False): 
             self.bandnorm['ipd'] = SubbandNorm(
@@ -118,7 +128,7 @@ class TSE_BSRNN_SPATIAL(nn.Module):
                 norm_type=norm_type
             )
         if feat_cfg.get('cyc_doaemb',{}).get('enabled',False): 
-            if feat_cfg.get('cyc_doaemb',{}).get('fusion_type') == "concat":
+            if feat_cfg['cyc_doaemb']['fusion_type'] == "concat":
                 self.bandnorm['cyc_doaemb'] = SubbandNorm(
                     band_width=band_width,
                     spec_dim=n_pairs,
@@ -126,8 +136,8 @@ class TSE_BSRNN_SPATIAL(nn.Module):
                     feature_dim=feature_dim,
                     norm_type=norm_type
                 )
-            elif feat_cfg.get('cyc_doaemb',{}).get('fusion_type') == "multiply":
-                feat_cfg['cyc_doaemb']['out_channel'] = 96 # dim_hidden    
+            elif feat_cfg['cyc_doaemb']['fusion_type'] == 'multiply':
+                feat_cfg['cyc_doaemb']['out_channel'] = feature_dim # spatial_dim
         
         self.separator = BSRNN_Separator(
             nband=self.nband,
@@ -144,7 +154,8 @@ class TSE_BSRNN_SPATIAL(nn.Module):
             norm_type=norm_type,
             nspk=1
         )
-
+        
+        self.spatial_ft = SpatialFrontend(self.spatial_configs)
     def forward(self, mix, cue):
         """
         mix: (B, M, T_wav)
@@ -207,10 +218,10 @@ class TSE_BSRNN_SPATIAL(nn.Module):
             sub_emb = self.band_split(emb_feat)
             emb_emb = self.bandnorm['cyc_doaemb'](sub_emb)
             input_emb += emb_emb
-        
+                
         if self.spatial_configs['features']['cyc_doaemb']['enabled'] and self.spatial_configs['features']['cyc_doaemb']['fusion_type'] == 'multiply':
-            input_emb=self.spatial_ft.features['cyc_doaemb'].post(input_emb,spatial_feat_dict['cyc_doaemb'])     
-        
+            input_emb=self.spatial_ft.features['cyc_doaemb'].post(input_emb.permute(0,2,1,3),spatial_feat_dict['cyc_doaemb']).permute(0,2,1,3)     
+    
         sep_out = self.separator(input_emb)   
         
         subband_mix = self.band_split(Y[:, 0])

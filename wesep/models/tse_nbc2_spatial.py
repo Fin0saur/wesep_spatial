@@ -20,6 +20,7 @@ class TSE_NBC2_SPATIAL(nn.Module):
         
         # --- 2. Spatial Configs ---
         spatial_configs = {
+            "full_input": False,
             "geometry": {
                 "n_fft": self.win,              
                 "fs": 16000,
@@ -53,7 +54,10 @@ class TSE_NBC2_SPATIAL(nn.Module):
         self.spatial_configs = deep_update(spatial_configs, config.get('spatial', {}))
         
         # --- 3. Dynamic Input Size Calculation ---
-        spec_feat_dim = 2 
+        if self.spatial_configs['full_input'] :
+            spec_feat_dim = 2*len(self.spatial_configs['geometry']['mic_coords'])
+        else :
+            spec_feat_dim = 2 
         
         n_pairs = len(self.spatial_configs['pairs'])
         feat_cfg = self.spatial_configs['features']
@@ -123,7 +127,11 @@ class TSE_NBC2_SPATIAL(nn.Module):
         Y_norm = Y / ref_mag_mean.unsqueeze(1)
         
         # Spectral: (B, 2, F, T)
-        spec_feat = torch.stack([Y_norm[:, 0].real, Y_norm[:, 0].imag], dim=1)
+        spec_feat = None
+        if self.spatial_configs['full_input']:
+            spec_feat = torch.cat([Y_norm.real, Y_norm.imag], dim=1)
+        else :    
+            spec_feat = torch.stack([Y_norm[:, 0].real, Y_norm[:, 0].imag], dim=1)
         
         # Spatial: (B, 16, F, T)
         spatial_feat_dict = self.spatial_ft.compute_all(Y_norm,azi_rad, ele_rad)
