@@ -120,22 +120,22 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # Spatio-temporal Features
         # Spatial: (B, 16, F, T)
         if self.spatial_configs['features']['ipd']['enabled'] :
-            ipd_feature = self.spatial_ft.features['ipd'].compute(spec)
+            ipd_feature = self.spatial_ft.features['ipd'].compute(spec_norm)
             spec_feat = self.spatial_ft.features['ipd'].post(spec_feat,ipd_feature)
             # spec_feat=self.spatial_ft.features['ipd'].post(spec_feat,spatial_feat_dict['ipd'])
         
         if self.spatial_configs['features']['cdf']['enabled'] :
-            cdf_feature = self.spatial_ft.features['cdf'].compute(spec,azi_rad,ele_rad)
+            cdf_feature = self.spatial_ft.features['cdf'].compute(spec_norm,azi_rad,ele_rad)
             spec_feat = self.spatial_ft.features['cdf'].post(spec_feat,cdf_feature)
             # spec_feat=self.spatial_ft.features['cdf'].post(spec_feat,spatial_feat_dict['cdf'])
         
         if self.spatial_configs['features']['sdf']['enabled']:
-            sdf_feature = self.spatial_ft.features['sdf'].compute(spec,azi_rad,ele_rad)
+            sdf_feature = self.spatial_ft.features['sdf'].compute(spec_norm,azi_rad,ele_rad)
             spec_feat = self.spatial_ft.features['sdf'].post(spec_feat,sdf_feature)
             # spec_feat=self.spatial_ft.features['sdf'].post(spec_feat,spatial_feat_dict['sdf'])
         
         if self.spatial_configs['features']['delta_stft']['enabled']:
-            dstft_feature = self.spatial_ft.features['delta_stft'].compute(spec)
+            dstft_feature = self.spatial_ft.features['delta_stft'].compute(spec_norm)
             spec_feat = self.spatial_ft.features['delta_stft'].post(spec_feat,dstft_feature)
             # spec_feat=self.spatial_ft.features['delta_stft'].post(spec_feat,spatial_feat_dict['delta_stft'])
             
@@ -156,5 +156,6 @@ class TSE_NBC2_SPATIAL(nn.Module):
         
         est_wav = self.sep_model.istft(est_spec)
         est_wav = est_wav.unsqueeze(1)
+        
         return est_wav
     

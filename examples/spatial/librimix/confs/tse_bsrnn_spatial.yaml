@@ -38,21 +38,22 @@ loss_args: { }
 model:
   tse_model: TSE_BSRNN_SPATIAL
 model_args:
-  tse_model:        
-    win: 512
-    stride: 128  
+  tse_model:  
+    full_input: True      
     separator:
       sr: 16000
+      win: 512
+      stride: 128  
       feature_dim: 128
       num_repeat: 6
       causal: False
       nspk: 1
     spatial:
       geometry:
+        n_fft: 512
         fs: 16000
         c: 343.0
         mic_spacing: 0.03333333 
-
       pairs:
         - [0, 1]
         - [1, 2]
@@ -65,21 +66,20 @@ model_args:
         - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
       features:
         ipd: 
-          enabled: True        
+          enabled: False        
         cdf: 
-          enabled: True       
+          enabled: False       
         sdf: 
-          enabled: True       
+          enabled: False       
         delta_stft: 
-          enabled: True
+          enabled: False
         cyc_doaemb:
           enabled: True
-          cyc_alpha: 20
-          cyc_dimension: 40
-          use_ele: True
-          out_channel: 1          
-          fusion_type: multiply
-      full_input: False
+          encoder_kwargs:
+            cyc_alpha: 20
+            cyc_dimension: 40
+            use_ele: True       
+      
 
 find_unused_parameters: False
 
