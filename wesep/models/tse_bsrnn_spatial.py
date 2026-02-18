@@ -67,7 +67,7 @@ class TSE_BSRNN_SPATIAL(nn.Module):
         if self.spatial_configs["features"]["sdf"]["enabled"]:
             sep_configs["spec_dim"] += n_pairs
         if self.spatial_configs["features"]["delta_stft"]["enabled"]:
-            sep_configs["spec_dim"] += n_pairs
+            sep_configs["spec_dim"] += 2 * n_pairs
         if self.spatial_configs["features"]["cyc_doaemb"]["enabled"]:
             self.spatial_configs['features']['cyc_doaemb']['encoder_kwargs']['out_channel'] = sep_configs["feature_dim"] # dim_hidden    
             self.spatial_configs['features']['cyc_doaemb']['num_encoder'] = 1
