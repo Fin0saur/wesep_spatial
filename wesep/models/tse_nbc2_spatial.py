@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from wesep.modules.spatial.spatial_frontend import SpatialFrontend
 from wesep.modules.separator.nbc2 import NBC2
 from wesep.modules.common.deep_update import deep_update
+from wesep.modules.common.norm import AmplitudeNorm
 
 class TSE_NBC2_SPATIAL(nn.Module):
     def __init__(self, config):
@@ -91,6 +92,8 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # --- 5. Instantiate Modules ---
         self.sep_model = NBC2(**self.sep_configs)
         self.spatial_ft = SpatialFrontend(self.spatial_configs)
+        # --- 6. Instantiate other ---
+        self.A_norm = AmplitudeNorm()
         
     def forward(self, mix, cue):
         # input shape: (B, C, T)
@@ -101,13 +104,16 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # S1. Convert into frequency-domain
         spec = self.sep_model.stft(mix)[-1]
         
-        # S2. Concat real and imag, split to subbands
+        # S2. A-norm
+        spec_norm,norm_scale = self.A_norm(spec)
+        
+        # S3. Concat real and imag, split to subbands
         # Spectral: (B, 2, F, T) or (B, C, F, T)
         spec_feat = None
         if self.full_input:
-            spec_feat = torch.cat([spec.real, spec.imag], dim=1)
+            spec_feat = torch.cat([spec_norm.real, spec_norm.imag], dim=1)
         else :    
-            spec_feat = torch.stack([spec[:, 0].real, spec[:, 0].imag], dim=1)
+            spec_feat = torch.stack([spec_norm[:, 0].real, spec_norm[:, 0].imag], dim=1)
         
         # spatial_feat_dict = self.spatial_ft.compute_all(spec, azi_rad, ele_rad)
         #######################################################
@@ -120,17 +126,17 @@ class TSE_NBC2_SPATIAL(nn.Module):
         
         if self.spatial_configs['features']['cdf']['enabled'] :
             cdf_feature = self.spatial_ft.features['cdf'].compute(spec,azi_rad,ele_rad)
-            spec_feat = self.spatial_ft.features['ipd'].post(spec_feat,cdf_feature)
+            spec_feat = self.spatial_ft.features['cdf'].post(spec_feat,cdf_feature)
             # spec_feat=self.spatial_ft.features['cdf'].post(spec_feat,spatial_feat_dict['cdf'])
         
         if self.spatial_configs['features']['sdf']['enabled']:
             sdf_feature = self.spatial_ft.features['sdf'].compute(spec,azi_rad,ele_rad)
-            spec_feat = self.spatial_ft.features['ipd'].post(spec_feat,sdf_feature)
+            spec_feat = self.spatial_ft.features['sdf'].post(spec_feat,sdf_feature)
             # spec_feat=self.spatial_ft.features['sdf'].post(spec_feat,spatial_feat_dict['sdf'])
         
         if self.spatial_configs['features']['delta_stft']['enabled']:
             dstft_feature = self.spatial_ft.features['delta_stft'].compute(spec)
-            spec_feat = self.spatial_ft.features['ipd'].post(spec_feat,dstft_feature)
+            spec_feat = self.spatial_ft.features['delta_stft'].post(spec_feat,dstft_feature)
             # spec_feat=self.spatial_ft.features['delta_stft'].post(spec_feat,spatial_feat_dict['delta_stft'])
             
         ####################################################
@@ -145,7 +151,10 @@ class TSE_NBC2_SPATIAL(nn.Module):
         est_spec_feat = self.sep_model.decoder(encode_features)
         
         est_spec = torch.complex(est_spec_feat[:, 0], est_spec_feat[:, 1])
+        # inverse A-norm 
+        est_spec = self.A_norm.inverse(est_spec,norm_scale)
         
         est_wav = self.sep_model.istft(est_spec)
+        est_wav = est_wav.unsqueeze(1)
         return est_wav
     
