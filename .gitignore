@@ -40,4 +40,4 @@ tensorboard
 # **/*build*
 wespeaker_models
 
-.zip
+*.zip
