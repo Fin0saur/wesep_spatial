@@ -1,24 +1,44 @@
 import json
+import re
 import argparse
 from pathlib import Path
 
 
-def parse_speakers_from_key(key):
-    """
-    Extract speaker IDs from filename.
-    Example:
-    train_train_id00015_XXX_train_id00187_YYY_-4.2_4.2
-    -> ['id00015', 'id00187']
-    """
-    parts = key.split('_')
+def parse_two_speakers_from_key(key):
+    parts = key.split("_")
+    speakers = []
+    i = 0
 
-    spk_ids = []
-    for p in parts:
-        if p.startswith("id"):
-            spk_ids.append(p)
+    while i < len(parts):
+        if re.match(r"id\d{5}", parts[i]):
 
-    # 只取前两个（防止后面还有奇怪字段）
-    return spk_ids[:2]
+            spk_id = parts[i]
+            j = i + 1
+
+            # 找 5 位数字的 segment id
+            seg_index = None
+            while j < len(parts):
+                if re.fullmatch(r"\d{5}", parts[j]):
+                    seg_index = j
+                    break
+                j += 1
+
+            if seg_index is None:
+                raise ValueError(f"Cannot find seg_id in key: {key}")
+
+            yt_id = "_".join(parts[i + 1:seg_index])
+            seg_id = parts[seg_index]
+
+            speakers.append(spk_id)
+
+            i = seg_index + 1
+        else:
+            i += 1
+
+    if len(speakers) != 2:
+        raise ValueError(f"Failed parsing two speakers: {key}")
+
+    return speakers
 
 
 def main():
@@ -35,7 +55,7 @@ def main():
 
         for wav_path in sorted(mix_dir.glob("*.wav")):
             key = wav_path.stem
-            spk_ids = parse_speakers_from_key(key)
+            spk_ids = parse_two_speakers_from_key(key)
 
             if len(spk_ids) != 2:
                 print(f"Warning: skip {key}, cannot parse speakers")
