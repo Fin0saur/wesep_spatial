@@ -1,26 +1,25 @@
 dataloader_args:
-  batch_size: 3 #RTX2080 1, V100: 8, A800: 16
+  batch_size: 2 #RTX2080 1, V100: 8, A800: 16
   drop_last: true
-  num_workers: 12
+  num_workers: 6
   pin_memory: true
   prefetch_factor: 6
 
 dataset_args:
   resample_rate: &sr 16000
   sample_num_per_epoch: 0
-  shuffle: False
+  shuffle: true
   shuffle_args:
     shuffle_size: 2500
-  whole_utt: True
   chunk_len: 48000
-  noise_prob: 0 # noqa
+  noise_prob: 0 # prob to add noise aug per sample
   noise_lmdb_file: './data/musan/lmdb'
   cues:
-    spatial:
+    visual:
       use: true
       required: true
   cue_processing:
-    spatial:
+    visual:
 
 enable_amp: false
 exp_dir: exp/BSRNN
@@ -36,45 +35,29 @@ loss_args: { }
 #   loss_weight: [[1.0],[1.0]]
 
 model:
-  tse_model: TSE_BSRNN_SPATIAL
+  tse_model: TSE_BSRNN_VISUAL
 model_args:
   tse_model:
-    win: 512
-    stride: 128
     separator:
-      sr: 16000
+      sr: *sr
+      win: 512
+      stride: 128
       feature_dim: 128
       num_repeat: 6
       causal: False
       nspk: 1
-    spatial:
-      geometry:
-        fs: 16000
-        c: 343.0
-        mic_spacing: 0.03333333
-      pairs:
-        - [0, 1]
-        - [1, 2]
-        - [2, 3]
-        - [0, 3]
-      mic_coords:
-        - [-0.05,        0.0, 0.0]  # Mic 0 (最左)
-        - [-0.0166,  0.0, 0.0]  # Mic 1
-        - [ 0.0166,  0.0, 0.0]  # Mic 2
-        - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
+    visual:
       features:
-        ipd:
+        muse_visual:
           enabled: True
-        cdf:
-          enabled: True
-        sdf:
-          enabled: False
-        delta_stft:
-          enabled: False
-        tpd:
-          enabled: False
+          vf_pretrained: "/zhangke/junjie/MeMo/src/Model/visual_frontend/visual_frontend.pt"
+          vtcn_channels: 512
+          vtcn_layers: 5
+          upsample: True
+          mix_dim: 128
+          fusion: "concat"
 
-find_unused_parameters: False
+# find_unused_parameters: True
 
 model_init:
   tse_model: null

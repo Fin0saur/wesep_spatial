@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from wesep.dataset import processor_speaker, processor_spatial
+from wesep.dataset import processor_speaker, processor_visual, processor_spatial
 from wesep.utils.file_utils import load_yaml
 
 # ---------------------------
@@ -75,6 +75,9 @@ def register_cue(name):
 # ---------------------------
 @register_cue("audio")
 def build_speaker_cue(dataset, cue_conf, state, configs):
+    """
+    Stub for speaker cue
+    """
     required = cue_conf.get("required", True)
     scope = cue_conf.get("scope", "speaker")  # "speaker", "utterance"
 
@@ -130,14 +133,33 @@ def build_speaker_cue(dataset, cue_conf, state, configs):
 # ---------------------------
 # visual cue (stub)
 # ---------------------------
-
-
 @register_cue("visual")
 def build_visual_cue(dataset, cue_conf, state, configs):
     """
-    Stub for future visual cue
+    Stub for visual cue
     """
-    # dataset = Processor(dataset, processor_visual.xxx, ...)
+    required = cue_conf.get("required", True)
+    scope = cue_conf.get("scope", "speaker")  # "speaker", "utterance"
+
+    policy_conf = cue_conf.get("policy", {})
+    policy_type = policy_conf.get("type", None)  # "random", "fixed"
+    key_field = policy_conf.get("key", None)
+    resource_path = policy_conf.get("resource", None)
+
+    if policy_type is None or key_field is None or resource_path is None:
+        raise ValueError(f"Invalid visual cue policy config: {policy_conf}")
+
+    if policy_type == "fixed":
+        dataset = dataset.apply(
+            processor_visual.sample_fixed_visual_cue,
+            resource_path,
+            key_field=key_field,
+            scope=scope,
+            required=required,
+        )
+    else:
+        raise ValueError(f"Invalid visual cue policy_type: {policy_type}")
+
     return dataset
 
 
@@ -149,18 +171,20 @@ def build_visual_cue(dataset, cue_conf, state, configs):
 @register_cue("spatial")
 def build_spatial_cue(dataset, cue_conf, state, configs):
     """
-    Stub for future spatial cue
+    Stub for spatial cue
     """
     required = cue_conf.get("required", True)
     scope = cue_conf.get("scope", "speaker")  # "speaker", "utterance"
 
     policy_conf = cue_conf.get("policy", {})
-    spatial_fields= cue_conf.get("spatial_fields",["azimuth"]) # ["azimuth", "elevation] if use elevation or ["azimuth"]
-    
+    spatial_fields = cue_conf.get(
+        "spatial_fields",
+        ["azimuth"])  # ["azimuth", "elevation] if use elevation or ["azimuth"]
+
     policy_type = policy_conf.get("type", None)  # "random", "fixed"
     key_field = policy_conf.get("key", None)
     resource_path = policy_conf.get("resource", None)
-    
+
     if policy_type is None or key_field is None or resource_path is None:
         raise ValueError(f"Invalid speaker cue policy config: {policy_conf}")
 

@@ -50,7 +50,7 @@ fi
 
 data=${data}/${noise_type}
 
-if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ] && [ "${datatype}" = "shard" ]; then
+if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ] && [ "${data_type}" = "shard" ]; then
   echo "Making shards from samples.jsonl ..."
   for dset in train-100 dev test; do
   #  for dset in train-360; do
