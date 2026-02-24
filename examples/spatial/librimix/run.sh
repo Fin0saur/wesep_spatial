@@ -21,7 +21,7 @@ mix_data_path="${Libri2Mix_dir}/wav${fs}/${min_max}"
 gpus="[0,1,2,3,4,5]"
 config=confs/tse_bsrnn_spatial.yaml
 data_config=confs/create_dataset.yaml
-exp_dir=exp/TSE_bsrnn_emb_test
+exp_dir=exp/TSE_BSRNN_InitStates
 if [ -z "${config}" ] && [ -f "${exp_dir}/config.yaml" ]; then
   config="${exp_dir}/config.yaml"
 fi
@@ -49,7 +49,7 @@ fi
 
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   echo "Prepare datasets ..."
-  ./local/prepare_data.sh --mix_data_path ${mix_data_path} \ 
+  ./local/prepare_data.sh --mix_data_path ${mix_data_path} \
     --data ${data} \
     --noise_type ${noise_type} \
     --stage 1 \
