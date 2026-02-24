@@ -34,7 +34,7 @@ def main():
 
     for s in tqdm(samples):
         mix_id = s["key"]
-        spk_ids = s["spk"]  # 顺序必须与 spk1 / spk2 对齐
+        spk_ids = s["spk"] 
 
         spatial_path = os.path.join(spatial_root, f"{mix_id}.npy")
         if not os.path.exists(spatial_path):
@@ -42,7 +42,6 @@ def main():
 
         spatial_raw = np.load(spatial_path, allow_pickle=True).item()
 
-        # 构建完整 sources（mix-level，全量）
         sources = []
         for i, spk in enumerate(spk_ids):
             idx = i + 1
@@ -65,7 +64,6 @@ def main():
         if "sir_db" in spatial_raw:
             meta["sir_db"] = float(spatial_raw["sir_db"])
 
-        # 为每个 target speaker 生成一个 entry
         for tgt_spk in spk_ids:
             mix_spk_id = f"{mix_id}::{tgt_spk}"
             spatial_index[mix_spk_id] = {

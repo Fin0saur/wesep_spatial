@@ -19,7 +19,6 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic selection")
     args = parser.parse_args()
 
-    # 1. 设定固定的随机种子，确保每次生成的测试集 enrollment 绝对一致
     random.seed(args.seed)
 
     spk2items = load_speech_json(args.speech_json)
@@ -38,20 +37,13 @@ def main():
             spk_ids = obj["spk"]
             src_map = obj["src"]
 
-            # 为当前混合音频中的每一个说话人，分配一个 Enrollment
             for spk in spk_ids:
-                # 获取该说话人在混合音频中使用的那一句话的真实路径
                 mix_wav_path = src_map[spk][0]
                 
-                # 获取该说话人在本地资源库里的所有可用语音片段
                 available_utts = spk2items.get(spk, [])
                 
-                # 🌟 核心防御：剔除掉在混合音频中使用的那句话，防止网络作弊 (Data Leakage)
                 valid_enrolls = [item for item in available_utts if item["path"] != mix_wav_path]
-
-                # 极端情况容错
                 if not valid_enrolls:
-                    # 如果这个说话人穷得只有这一句话，只能被迫使用原句（通常评估集会避免这种数据）
                     valid_enrolls = available_utts
                     missing_enrolls += 1
                     print(f"[Warning] Speaker {spk} has no other utterances. Reusing mix audio for enrollment in {mix_key}.")
@@ -59,8 +51,8 @@ def main():
                 valid_enrolls = sorted(valid_enrolls, key=lambda x: x["utt_id"])
                 chosen_enroll = random.choice(valid_enrolls)
 
-                target_field = spk  # 直接使用 spk_id 作为 target_field
-                enroll_relpath = chosen_enroll["path"]  # 记录提示音路径
+                target_field = spk 
+                enroll_relpath = chosen_enroll["path"] 
 
                 out_lines.append(f"{mix_key}\t{target_field}\t{enroll_relpath}\n")
                 
