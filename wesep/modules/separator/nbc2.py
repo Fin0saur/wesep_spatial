@@ -1,3 +1,7 @@
+# Reference:
+#   [1] Quan C, Li X. NBC2: Multichannel speech separation with revised narrow-band conformer
+#   [2] Original codebase: https://github.com/Audio-WestlakeU/NBSS
+
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -134,21 +138,24 @@ class NBC2Encoder(nn.Module):
         return x
 
 class NBC2Decoder(nn.Module):
-    def __init__(self, dim_hidden: int, output_size: int):
+    def __init__(self, dim_hidden: int, n_spk: int = 1):
         super().__init__()
-        self.linear = nn.Linear(in_features=dim_hidden, out_features=output_size)
+        self.nspk = n_spk
+        self.linear = nn.Linear(in_features=dim_hidden, out_features=n_spk * 2)
 
     def forward(self, x: Tensor) -> Tensor:
         """
         Input:  (B, C_in, F, T)
-        Output: (B, C_out, F, T)
+        Output: (B, 2, nspk, F, T)
         """
         B, C, F, T = x.shape
         x = x.permute(0, 2, 3, 1).contiguous()
 
-        x = self.linear(x) # (B, F, T, output_size)
+        x = self.linear(x) # (B, F, T, nspk * 2)
         
-        x = x.permute(0, 3, 1, 2).contiguous()
+        x = x.view(B, F, T, self.nspk, 2)
+        
+        x = x.permute(0, 4, 3, 1, 2).contiguous()
         
         return x
 
@@ -183,7 +190,7 @@ class NBC2Block(nn.Module):
 
     def forward(self, x: Tensor, att_mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         """
-        Input:  (B, C, F, T)  <-- 标准化接口
+        Input:  (B, C, F, T)
         Output: (B, C, F, T), attn
         """
         B, C, F, T = x.shape
@@ -222,20 +229,31 @@ class NBC2Block(nn.Module):
         return norm
 
 class NBC2(nn.Module):
-    def __init__(self, win: int, stride: int,input_size: int, output_size: int, n_layers: int, encoder_kernel_size: int = 5, dim_hidden: int = 192, dim_ffn: int = 384, block_kwargs: Dict[str, Any] = {}) -> None:
+    def __init__(
+        self, 
+        win, 
+        stride,
+        spec_dim, 
+        n_layers, 
+        encoder_kernel_size=5, 
+        dim_hidden=192, 
+        dim_ffn=384, 
+        n_spk=1, # For Separation (multiple output)
+        block_kwargs={}
+    ):
         super().__init__()
         
         self.stft = STFT(win,stride,win)
-        self.encoder = NBC2Encoder(input_size=input_size, dim_hidden=dim_hidden, kernel_size=encoder_kernel_size)
+        self.encoder = NBC2Encoder(input_size=spec_dim, dim_hidden=dim_hidden, kernel_size=encoder_kernel_size)
         
         self.sa_layers = nn.ModuleList()
         for l in range(n_layers):
             self.sa_layers.append(NBC2Block(dim_hidden=dim_hidden, dim_ffn=dim_ffn, **block_kwargs))
 
-        self.decoder = NBC2Decoder(dim_hidden=dim_hidden, output_size=output_size)
+        self.decoder = NBC2Decoder(dim_hidden=dim_hidden, n_spk=n_spk)
         self.istft = iSTFT(win,stride,win)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x):
         """
         Input:  (B, C, T)
         Output: (B, 1, T)
@@ -273,7 +291,7 @@ if __name__ == "__main__":
         win=512,
         stride=256,
         input_size=2, # for only ref-channel input 
-        output_size=2,
+        n_spk=1,
         n_layers=8,
         dim_hidden=96,
         dim_ffn=96*2,

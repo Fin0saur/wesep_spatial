@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from wesep.modules.feature.speech import STFT, iSTFT
 from wesep.modules.common.norm import select_norm
-
+from typing import Union, List, Dict
 
 class BandSplit(nn.Module):
 
@@ -170,10 +170,14 @@ class ResRNN(nn.Module):
         self.proj = nn.Linear(hidden_size * (int(bidirectional) + 1),
                               input_size)  # hidden_size = feature_dim * 2
 
-    def forward(self, input):
+    def forward(self, input, h0=None, c0=None):
         # input shape: batch, dim, seq
 
-        rnn_output, _ = self.rnn(self.norm(input).transpose(1, 2).contiguous())
+        state = None
+        if h0 is not None and c0 is not None:
+            state = (h0, c0)
+        
+        rnn_output, _ = self.rnn(self.norm(input).transpose(1, 2).contiguous(), state)
         rnn_output = self.proj(rnn_output.contiguous().view(
             -1, rnn_output.shape[2])).view(input.shape[0], input.shape[2],
                                            input.shape[1])
@@ -197,18 +201,35 @@ class BSNet(nn.Module):
                                 bidirectional=True,
                                 norm_type='GN')
 
-    def forward(self, input):
-        # input shape: B, nband*N, T
+    def forward(self, input, state: dict = None):
+        # input shape: B, nband*feature_dim, T
         B, N, T = input.shape
-
+        nband = self.nband
+        
+        h0_band, c0_band = None, None
+        h0_comm, c0_comm = None, None
+        
+        if state is not None:
+            num_dirs_band = 2 if self.band_rnn.bidirectional else 1
+            num_dirs_comm = 2 if self.band_comm.bidirectional else 1
+            
+            if state.get('band_h0') is not None:
+                h0_band = state['band_h0'].repeat_interleave(nband, dim=0).unsqueeze(0).expand(num_dirs_band, -1, -1).contiguous()
+            if state.get('band_c0') is not None:
+                c0_band = state['band_c0'].repeat_interleave(nband, dim=0).unsqueeze(0).expand(num_dirs_band, -1, -1).contiguous()
+            if state.get('comm_h0') is not None:
+                h0_comm = state['comm_h0'].repeat_interleave(T, dim=0).unsqueeze(0).expand(num_dirs_comm, -1, -1).contiguous()
+            if state.get('comm_c0') is not None:
+                c0_comm = state['comm_c0'].repeat_interleave(T, dim=0).unsqueeze(0).expand(num_dirs_comm, -1, -1).contiguous()
+            
         band_output = self.band_rnn(
             input.view(B * self.nband, self.feature_dim,
-                       -1)).view(B, self.nband, -1, T)
+                       -1), h0=h0_band, c0=c0_band).view(B, self.nband, -1, T)
 
         # band comm
         band_output = (band_output.permute(0, 3, 2, 1).contiguous().view(
             B * T, -1, self.nband))
-        output = (self.band_comm(band_output).view(
+        output = (self.band_comm(band_output, h0=h0_comm, c0=c0_comm).view(
             B, T, -1, self.nband).permute(0, 3, 2, 1).contiguous())
 
         return output.view(B, N, T)
@@ -235,15 +256,20 @@ class BSRNN_Separator(nn.Module):
             self.separation.append(
                 BSNet(nband * feature_dim, nband, causal, norm_type))
 
-    def forward(self, x):
+    def forward(self, x, state: Union[Dict, List[Dict]] = None):
         """
         x: [B, nband, feature_dim, T]
+        state: 
+            - Dict: 
+            - List[Dict]
         out: [B, nband, feature_dim, T]
         """
         batch_size = x.shape[0]
         x = x.view(batch_size, self.nband * self.feature_dim, -1)
         for idx, sep in enumerate(self.separation):
-            x = sep(x)
+            curr_state = state[idx] if isinstance(state, list) else state
+            x = sep(x, state=curr_state)
+                
         x = x.view(batch_size, self.nband, self.feature_dim, -1)
         return x
 
