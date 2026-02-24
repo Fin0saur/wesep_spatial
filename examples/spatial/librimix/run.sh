@@ -14,14 +14,14 @@ fs=16k
 min_max=min
 noise_type="clean"
 data_type="raw" # shard/raw
-Libri2Mix_dir=/root/Spatial_librimix #/YourPATH/librimix/Libri2Mix_spatial
+Libri2Mix_dir=/YourPATH/librimix/Libri2Mix
 mix_data_path="${Libri2Mix_dir}/wav${fs}/${min_max}"
 
 # Training related
-gpus="[0,1,2,3,4,5]"
+gpus="[0]"
 config=confs/tse_bsrnn_spatial.yaml
 data_config=confs/create_dataset.yaml
-exp_dir=exp/TSE_BSRNN_InitStates
+exp_dir=exp/TSE_BSRNN_SPATIAL
 if [ -z "${config}" ] && [ -f "${exp_dir}/config.yaml" ]; then
   config="${exp_dir}/config.yaml"
 fi
@@ -133,7 +133,4 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     --use_dnsmos "${use_dnsmos}" \
     --dnsmos_use_gpu "${dnsmos_use_gpu}" \
     --n_gpu "${num_gpus}"
-fi
-if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
-  python wesep/modules/separator/nbc2.py
 fi
