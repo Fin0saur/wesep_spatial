@@ -15,7 +15,7 @@ from wesep.modules.separator.bsrnn import BSRNN
 from wesep.modules.common.deep_update import deep_update
 
 
-class TSE_BSRNN_SPK_SPATIAL(nn.Module):
+class TSE_BSRNN_SPK(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -35,10 +35,12 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         sep_configs = {**sep_configs, **config['separator']}
         spatial_configs = {
             "geometry": {
-                "n_fft": 512,              
+                "n_fft": 512,
+                "hop_length": 128,
+                "win_length": 512,
                 "fs": 16000,
                 "c": 343.0,
-                "mic_spacing": 0.03333333,
+                "mic_spacing": 0.033333,
                 "mic_coords": [
                     [-0.05,        0.0, 0.0],  # Mic 0
                     [-0.01666667,  0.0, 0.0],  # Mic 1
@@ -46,21 +48,45 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
                     [ 0.05,        0.0, 0.0],  # Mic 3
                 ],
             },
-            "pairs": [
-                [0, 1], [1, 2], [2, 3], [0, 3]
-            ],
+            "pairs": [[0, 1], [1, 2], [2, 3], [0, 3]], 
             "features": {
-                "ipd": {"enabled": False},
-                "cdf": {"enabled": False},
-                "sdf": {"enabled": False},
-                "delta_stft": {"enabled": False},
-                "cyc_doaemb":{
+                "ipd": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "cdf": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "sdf": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "delta_stft": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "Multiply_emb": {
                     "enabled": False,
-                    "cyc_alpha": 20,
-                    "cyc_dimension": 40,
+                    "num_encoder": 1,
+                    "encoding_config":{
+                        "encoding": "cyc",
+                        "cyc_alpha": 20,
+                        "cyc_dimension": 40,
+                    },
                     "use_ele": True,
-                    "out_channel": 1, # only use when concat
-                    "fusion_type": "multiply" # concat or multiply
+                    "out_channel": 1
+                },
+                "InitStates_emb": {  
+                    "enabled": False,
+                    "num_encoder": 1,
+                    "encoding_config":{
+                        "encoding": "oh",
+                        "emb_dim": 180,
+                    },
+                    "hidden_size_f": 256,
+                    "hidden_size_t": 256,
+                    "use_ele" : True
                 }
             }
         }
@@ -108,16 +134,20 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         if self.full_input:
             sep_configs["spec_dim"] = 2 * len(self.spatial_configs['geometry']['mic_coords'])
         if self.spatial_configs["features"]["ipd"]["enabled"]:
-            sep_configs["spec_dim"] += n_pairs
+            sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["ipd"]["num_encoder"]
         if self.spatial_configs["features"]["cdf"]["enabled"]:
-            sep_configs["spec_dim"] += n_pairs
+            sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["cdf"]["num_encoder"]
         if self.spatial_configs["features"]["sdf"]["enabled"]:
-            sep_configs["spec_dim"] += n_pairs
+            sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["sdf"]["num_encoder"]
         if self.spatial_configs["features"]["delta_stft"]["enabled"]:
-            sep_configs["spec_dim"] += 2 * n_pairs
-        if self.spatial_configs["features"]["cyc_doaemb"]["enabled"]:
-            self.spatial_configs['features']['cyc_doaemb']['encoder_kwargs']['out_channel'] = sep_configs["feature_dim"] # dim_hidden    
-            self.spatial_configs['features']['cyc_doaemb']['num_encoder'] = 1
+            sep_configs["spec_dim"] += 2 * n_pairs * self.spatial_configs["features"]["delta_stft"]["num_encoder"]
+        if self.spatial_configs["features"]["Multiply_emb"]["enabled"]:
+            self.spatial_configs['features']['Multiply_emb']['out_channel'] = sep_configs["feature_dim"] # dim_hidden    
+            self.spatial_configs['features']['Multiply_emb']['num_encoder'] = 1
+        if self.spatial_configs["features"]["InitStates_emb"]["enabled"]:
+            self.spatial_configs["features"]["InitStates_emb"]["hidden_size_f"] = sep_configs["feature_dim"] * 2
+            self.spatial_configs["features"]["InitStates_emb"]["hidden_size_t"] = sep_configs["feature_dim"] * 2
+            self.spatial_configs["features"]["InitStates_emb"]["num_encoder"] = sep_configs["num_repeat"]
         self.sep_model = BSRNN(**sep_configs)
         # ===== Speaker Loading =====
         if self.spk_configs["features"]["context"]["enabled"]:
@@ -141,11 +171,13 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         ele_rad = spatial_cue[:, 1]
         
         # input shape: (B, T)
+        mix_dims = mix.dim()
+        assert mix_dims == 2, "Only support 2D Input"
 
         ##### Cue of the target speaker
-        wav_enroll = enroll[..., 0] # only ref channel
-        
+        wav_enroll = enroll
         ###### Extraction with speaker cue
+        batch_size, nsamples = mix.shape
         wav_mix = mix
         ###########################################################
         # C0. Feature: listen
@@ -158,12 +190,10 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         spec = self.sep_model.stft(wav_mix)[-1]
         # S2. Concat real and imag, split to subbands
         spec_RI=None
-        spec_RI_single = torch.stack([spec[:,0].real, spec[:,0].imag], 1)
         if self.full_input:
             spec_RI = torch.cat([spec.real, spec.imag], dim=1)
         else :
-            spec_RI = torch.stack([spec[:,0].real, spec[:,0].imag], 1)  # (B, 2, F, T)
-        
+            spec_RI = torch.stack([spec.real, spec.imag], 1)  # (B, 2, F, T)
         ###########################################################
         # C1. Feature: usef
         if self.spk_configs['features']['usef']['enabled']:
@@ -173,7 +203,7 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
             enroll_spec = torch.stack([enroll_spec.real, enroll_spec.imag],
                                       1)  # (B, 2, F, T)
             enroll_usef, mix_usef = self.spk_ft.usef.compute(
-                enroll_spec, spec_RI_single)  # (B, embed_dim, F, T)
+                enroll_spec, spec_RI)  # (B, embed_dim, F, T)
             # C1.2 Concate the USEF feature to the mix_repr's spec
             spec_RI = self.spk_ft.usef.post(
                 mix_usef, enroll_usef)  # (B, embed_dim*2, F, T)
@@ -206,7 +236,7 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         subband_spec = self.sep_model.band_split(
             spec_RI)  # list of (B, 2/3/2*usef.emb_dim, BW, T)
         subband_mix_spec = self.sep_model.band_split(
-            spec[:,0])  # list of (B, BW, T) complex
+            spec)  # list of (B, BW, T) complex
         # S3. Normalization and bottleneck
         subband_feature = self.sep_model.subband_norm(
             subband_spec)  # (B, nband, feat, T)
@@ -228,15 +258,19 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
             subband_feature = self.spk_ft.spkemb.post(
                 subband_feature, enroll_emb)  # (B, nband, feat, T)
             
-        if self.spatial_configs['features']['cyc_doaemb']['enabled']:
-            cyc_doaemb = self.spatial_ft.features['cyc_doaemb'].compute(azi_rad,ele_rad)
-            subband_feature=self.spatial_ft.features['cyc_doaemb'].post(subband_feature.permute(0,2,1,3),cyc_doaemb).permute(0,2,1,3)     
+        if self.spatial_configs['features']['Multiply_emb']['enabled']:
+            cyc_doaemb = self.spatial_ft.features['Multiply_emb'].compute(azi=azi_rad,ele=ele_rad)
+            subband_feature=self.spatial_ft.features['Multiply_emb'].post(subband_feature.permute(0,2,1,3),cyc_doaemb).permute(0,2,1,3)     
+        
+        ch_result = None
+        
+        if self.spatial_configs['features']['InitStates_emb']['enabled']:
+            ch_result = self.spatial_ft.features['InitStates_emb'].compute(azi=azi_rad,ele=ele_rad)   
         ###########################################################
         # S4. Separation
         sep_output = self.sep_model.separator(
-            subband_feature)  # (B, nband, feat, T)
+            subband_feature, ch_result)  # (B, nband, feat, T)
         # S5. Complex Mask
-        
         est_spec_RI = self.sep_model.band_masker(
             sep_output, subband_mix_spec)  # (B, 2, S, F, T)
         est_complex = torch.complex(est_spec_RI[:, 0],
@@ -251,69 +285,3 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         ###########################################################
         return s
 
-
-def check_causal(model):
-    input = torch.randn(1, 16000 * 8).clamp_(-1, 1)
-    enroll = torch.randn(1, 16000 * 2).clamp_(-1, 1)
-    fs = 16000
-    model = model.eval()
-    with torch.no_grad():
-        out1 = model(input, enroll)
-        for i in range(fs * 1, fs * 4, fs):
-            inputs2 = input.clone()
-            inputs2[..., i:] = 1 + torch.rand_like(inputs2[..., i:])
-            out2 = model(inputs2, enroll)
-            print((((out1[0] - out2[0]).abs() > 1e-8).float().argmax()) / fs)
-            print((((inputs2 - input).abs() > 1e-8).float().argmax()) / fs)
-
-
-if __name__ == "__main__":
-    from thop import profile, clever_format
-
-    config = dict()
-    config['separator'] = dict(
-        sr=16000,
-        win=512,
-        stride=128,
-        feature_dim=128,
-        num_repeat=6,
-        causal=True,
-        nspk=1,
-    )
-    config['speaker'] = {
-        "features": {
-            "listen": {
-                "enabled": True
-            },
-            "usef": {
-                "enabled": True
-            },
-            "tfmap": {
-                "enabled": True
-            },
-            "context": {
-                "enabled": True
-            },
-            "spkemb": {
-                "enabled": True
-            },
-        }
-    }
-    model = TSE_BSRNN_SPK_SPATIAL(config)
-    s = 0
-    for param in model.parameters():
-        s += np.product(param.size())
-    print("# of parameters: " + str(s / 1024.0 / 1024.0))
-    mix = torch.randn(4, 32000)
-    enroll = torch.randn(4, 31235)
-    model = model.eval()
-    with torch.no_grad():
-        output = model(mix, enroll)
-    print(output.shape)
-
-    check_causal(model)
-    exit()
-
-    macs, params = profile(model, inputs=(x, spk_embeddings))
-    macs, params = clever_format([macs, params], "%.3f")
-    print(macs, params)

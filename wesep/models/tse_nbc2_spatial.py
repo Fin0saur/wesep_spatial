@@ -17,10 +17,12 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # --- 2. Merge Configs ---
         spatial_configs = {
             "geometry": {
-                "n_fft": 512,              
+                "n_fft": 512,
+                "hop_length": 128,
+                "win_length": 512,
                 "fs": 16000,
                 "c": 343.0,
-                "mic_spacing": 0.03333333,
+                "mic_spacing": 0.033333,
                 "mic_coords": [
                     [-0.05,        0.0, 0.0],  # Mic 0
                     [-0.01666667,  0.0, 0.0],  # Mic 1
@@ -28,24 +30,35 @@ class TSE_NBC2_SPATIAL(nn.Module):
                     [ 0.05,        0.0, 0.0],  # Mic 3
                 ],
             },
-            "pairs": [
-                [0, 1], [1, 2], [2, 3], [0, 3]
-            ],
+            "pairs": [[0, 1], [1, 2], [2, 3], [0, 3]], 
             "features": {
-                "ipd": {"enabled": True},
-                "cdf": {"enabled": True},
-                "sdf": {"enabled": True},
-                "delta_stft": {"enabled": True},
-                "cyc_doaemb":{
-                    "encoder_kwargs" :{
+                "ipd": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "cdf": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "sdf": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "delta_stft": {
+                    "enabled": False, 
+                    "num_encoder": 1
+                },
+                "Multiply_emb": {
+                    "enabled": False,
+                    "num_encoder": 1,
+                    "encoding_config":{
+                        "encoding": "cyc",
                         "cyc_alpha": 20,
                         "cyc_dimension": 40,
-                        "use_ele": True,
-                        "out_channel": 1,
                     },
-                    "enabled": True,
-                    "num_encoder" : 1 , # use when multiply 
-                }
+                    "use_ele": True,
+                    "out_channel": 1
+                },
             }
         }
         self.spatial_configs = deep_update(spatial_configs, config.get('spatial', {}))
@@ -63,8 +76,8 @@ class TSE_NBC2_SPATIAL(nn.Module):
         sep_configs = dict(
             win=512,
             stride=256,
-            input_size=2, # for only ref-channel input 
-            output_size=2,
+            spec_dim=2, # for only ref-channel input 
+            n_spk=1,
             n_layers=8,
             dim_hidden=96,
             dim_ffn=96*2,
@@ -74,21 +87,19 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # --- 3. Dynamic Input Size Calculation ---
         ### spec_feat dim calculation
         n_pairs = len(self.spatial_configs['pairs'])
-        if self.full_input :
-            self.sep_configs["input_size"] = 2 * len(self.spatial_configs['geometry']['mic_coords'])
-            
-        feat_cfg = self.spatial_configs['features']
-        if feat_cfg.get('ipd', {}).get('enabled', False): 
-            self.sep_configs["input_size"] += n_pairs
-        if feat_cfg.get('cdf', {}).get('enabled', False): 
-            self.sep_configs["input_size"] += n_pairs
-        if feat_cfg.get('sdf', {}).get('enabled', False): 
-            self.sep_configs["input_size"] += n_pairs
-        if feat_cfg.get('delta_stft', {}).get('enabled', False):
-            self.sep_configs["input_size"] += 2*n_pairs
-        if feat_cfg.get('cyc_doaemb',{}).get('enabled',False): 
-            self.spatial_configs['features']['cyc_doaemb']['encoder_kwargs']['out_channel'] = self.sep_configs["dim_hidden"] # dim_hidden    
-            self.spatial_configs['features']['cyc_doaemb']['num_encoder'] = self.sep_configs["n_layers"] 
+        if self.full_input:
+            sep_configs["spec_dim"] = 2 * len(self.spatial_configs['geometry']['mic_coords'])
+        if self.spatial_configs["features"]["ipd"]["enabled"]:
+            sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["ipd"]["num_encoder"]
+        if self.spatial_configs["features"]["cdf"]["enabled"]:
+            sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["cdf"]["num_encoder"]
+        if self.spatial_configs["features"]["sdf"]["enabled"]:
+            sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["sdf"]["num_encoder"]
+        if self.spatial_configs["features"]["delta_stft"]["enabled"]:
+            sep_configs["spec_dim"] += 2 * n_pairs * self.spatial_configs["features"]["delta_stft"]["num_encoder"]
+        if self.spatial_configs["features"]["Multiply_emb"]["enabled"]:
+            self.spatial_configs['features']['Multiply_emb']['out_channel'] = sep_configs["dim_hidden"] # dim_hidden    
+            self.spatial_configs['features']['Multiply_emb']['num_encoder'] = sep_configs["n_layers"]
         # --- 5. Instantiate Modules ---
         self.sep_model = NBC2(**self.sep_configs)
         self.spatial_ft = SpatialFrontend(self.spatial_configs)
@@ -120,22 +131,22 @@ class TSE_NBC2_SPATIAL(nn.Module):
         # Spatio-temporal Features
         # Spatial: (B, 16, F, T)
         if self.spatial_configs['features']['ipd']['enabled'] :
-            ipd_feature = self.spatial_ft.features['ipd'].compute(spec_norm)
+            ipd_feature = self.spatial_ft.features['ipd'].compute(Y=spec_norm)
             spec_feat = self.spatial_ft.features['ipd'].post(spec_feat,ipd_feature)
             # spec_feat=self.spatial_ft.features['ipd'].post(spec_feat,spatial_feat_dict['ipd'])
         
         if self.spatial_configs['features']['cdf']['enabled'] :
-            cdf_feature = self.spatial_ft.features['cdf'].compute(spec_norm,azi_rad,ele_rad)
+            cdf_feature = self.spatial_ft.features['cdf'].compute(Y=spec_norm,azi=azi_rad,ele=ele_rad)
             spec_feat = self.spatial_ft.features['cdf'].post(spec_feat,cdf_feature)
             # spec_feat=self.spatial_ft.features['cdf'].post(spec_feat,spatial_feat_dict['cdf'])
         
         if self.spatial_configs['features']['sdf']['enabled']:
-            sdf_feature = self.spatial_ft.features['sdf'].compute(spec_norm,azi_rad,ele_rad)
+            sdf_feature = self.spatial_ft.features['sdf'].compute(Y=spec_norm,azi=azi_rad,ele=ele_rad)
             spec_feat = self.spatial_ft.features['sdf'].post(spec_feat,sdf_feature)
             # spec_feat=self.spatial_ft.features['sdf'].post(spec_feat,spatial_feat_dict['sdf'])
         
         if self.spatial_configs['features']['delta_stft']['enabled']:
-            dstft_feature = self.spatial_ft.features['delta_stft'].compute(spec_norm)
+            dstft_feature = self.spatial_ft.features['delta_stft'].compute(Y=spec_norm)
             spec_feat = self.spatial_ft.features['delta_stft'].post(spec_feat,dstft_feature)
             # spec_feat=self.spatial_ft.features['delta_stft'].post(spec_feat,spatial_feat_dict['delta_stft'])
             
@@ -143,9 +154,9 @@ class TSE_NBC2_SPATIAL(nn.Module):
         encode_features = self.sep_model.encoder(spec_feat) # Conv
         for idx,m in enumerate(self.sep_model.sa_layers): # nbc2_block
             # cyc_doaemb ele-multiply
-            if self.spatial_configs['features']['cyc_doaemb']['enabled']:
-                cyc_doaemb = self.spatial_ft.features['cyc_doaemb'].compute(azi_rad,ele_rad,layer_idx=idx)
-                encode_features=self.spatial_ft.features['cyc_doaemb'].post(encode_features,cyc_doaemb,layer_idx=idx)
+            if self.spatial_configs['features']['Multiply_emb']['enabled']:
+                cyc_doaemb = self.spatial_ft.features['Multiply_emb'].compute(azi=azi_rad,ele=ele_rad,layer_idx=idx)
+                encode_features=self.spatial_ft.features['Multiply_emb'].post(encode_features,cyc_doaemb,layer_idx=idx)
             encode_features , _ = m(encode_features)
         
         est_spec_feat = self.sep_model.decoder(encode_features)
@@ -155,7 +166,6 @@ class TSE_NBC2_SPATIAL(nn.Module):
         est_spec = self.A_norm.inverse(est_spec,norm_scale)
         
         est_wav = self.sep_model.istft(est_spec)
-        est_wav = est_wav.unsqueeze(1)
         
         return est_wav
     

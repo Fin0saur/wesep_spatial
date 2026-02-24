@@ -82,31 +82,32 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   echo "stage 3: Build fixed audio cues for eval and test sets from samples.jsonl"
 
   for dset in dev test; do
-  mix_index="${real_data}/${noise_type}/${dset}/samples.jsonl"
-  out_dir="${real_data}/${noise_type}/${dset}/cues"
-  mkdir -p "${out_dir}"
+    mix_index="${real_data}/${noise_type}/${dset}/samples.jsonl"
+    out_dir="${real_data}/${noise_type}/${dset}/cues"
+    spatial_root=${mix_data_path}/${dset}/spatial
+    mkdir -p "${out_dir}"
 
-  # A) Generate speech.json(sanity check)
-  python local/build_audio_cues.py \
-    --samples_jsonl "${mix_index}" \
-    --outfile "${out_dir}/audio.json"
+    # A) Generate speech.json(sanity check)
+    python local/build_audio_cues.py \
+      --samples_jsonl "${mix_index}" \
+      --outfile "${out_dir}/audio.json"
 
-  python local/generate_mix2enroll.py \
-    --samples_jsonl "${mix_index}" \
-    --speech_json "${out_dir}/audio.json" \
-    --outfile "${out_dir}/mixture2enrollment" \
-    --seed 42
+    python local/generate_mix2enroll.py \
+      --samples_jsonl "${mix_index}" \
+      --speech_json "${out_dir}/audio.json" \
+      --outfile "${out_dir}/mixture2enrollment" \
+      --seed 42
 
   # C) Generate fixed_enroll.json
-  python local/build_fixed_enroll.py \
-    --mixture2enrollment "${out_dir}/mixture2enrollment" \
-    --speech_json "${out_dir}/audio.json" \
-    --outfile "${out_dir}/fixed_enroll.json"
+    python local/build_fixed_enroll.py \
+      --mixture2enrollment "${out_dir}/mixture2enrollment" \
+      --speech_json "${out_dir}/audio.json" \
+      --outfile "${out_dir}/fixed_enroll.json"
     
-  python local/build_spatial_cues.py \
-    --samples_jsonl "${mix_index}" \
-    --spatial_root "${spatial_root}" \
-    --outfile "${out_dir}/spatial.json"
+    python local/build_spatial_cues.py \
+      --samples_jsonl "${mix_index}" \
+      --spatial_root "${spatial_root}" \
+      --outfile "${out_dir}/spatial.json"
   # D) Generate cues.yaml for dev/test
   cat > ${real_data}/${noise_type}/${dset}/cues.yaml << EOF
 cues:

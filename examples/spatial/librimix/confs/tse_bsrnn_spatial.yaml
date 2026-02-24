@@ -66,20 +66,36 @@ model_args:
         - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
       features:
         ipd: 
-          enabled: False        
+          enabled: False     
+          num_encoder: 1  
         cdf: 
           enabled: False       
+          num_encoder: 1
         sdf: 
-          enabled: False       
+          enabled: False 
+          num_encoder: 1     
         delta_stft: 
           enabled: False
-        cyc_doaemb:
-          enabled: True
-          encoder_kwargs:
+          num_encoder: 1
+        Multiply_emb:
+          enabled: False
+          num_encoder: 1
+          encoding_config:
+            encoding: "cyc"
             cyc_alpha: 20
             cyc_dimension: 40
-            use_ele: True       
-      
+          use_ele: True
+          out_channel: 1       
+        InitStates_emb:
+          enabled: True
+          num_encoder: 1
+          encoding_config:
+            encoding: "cyc"
+            cyc_alpha: 20
+            cyc_dimension: 40
+          hidden_size_f: 256
+          hidden_size_t: 256
+          use_ele: False
 
 find_unused_parameters: False
 

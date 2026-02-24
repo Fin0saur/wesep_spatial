@@ -45,7 +45,8 @@ model_args:
       stride: 256   
       n_layers: 8          
       dim_hidden: 96       
-      dim_ffn: 192        
+      dim_ffn: 192
+      n_spk: 1        
       block_kwargs:
         n_heads: 2
         dropout: 0.1
@@ -69,19 +70,22 @@ model_args:
         - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
       features:
         ipd: 
-          enabled: False        
+          enabled: True       
         cdf: 
-          enabled: False       
+          enabled: True       
         sdf: 
-          enabled: False       
+          enabled: True       
         delta_stft: 
-          enabled: False
-        cyc_doaemb:
           enabled: True
-          encoder_kwargs:
+        Multiply_emb:
+          enabled: True
+          num_encoder: 1
+          encoding: "cyc"
+          encoding_config:
             cyc_alpha: 20
             cyc_dimension: 40
-            use_ele: True       
+          use_ele: True
+          out_channel: 1     
 
 # find_unused_parameters: True
 

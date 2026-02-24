@@ -130,20 +130,28 @@ model_args:
         ipd: 
           enabled: False        
         cdf: 
-          enabled: False       
+          enabled: True       
         sdf: 
-          enabled: False     
+          enabled: True      
         delta_stft: 
           enabled: False
-        cyc_doaemb:
-          enabled: False
-          encoder_kwargs:
+        Multiply_emb:
+          enabled: True
+          num_encoder: 1
+          encoding_config:
+            encoding: "cyc"
             cyc_alpha: 20
             cyc_dimension: 40
-            use_ele: True       
-        onehot_emb:
+          use_ele: True
+          out_channel: 1       
+        InitStates_emb:
           enabled: False
-          emb_dim: 180
+          num_encoder: 1
+          encoding_config:
+            encoding: "oh"
+            emb_dim: 180
+          hidden_size_f: 256
+          hidden_size_t: 256
           use_ele: False
 
 find_unused_parameters: False
@@ -164,7 +172,7 @@ optimizer_args:
     weight_decay: 0.0001
 
 clip_grad: 5.0
-save_epoch_interval: 1
+save_epoch_interval: 3
 
 scheduler:
   tse_model: ExponentialDecrease
