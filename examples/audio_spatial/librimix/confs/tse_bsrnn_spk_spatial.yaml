@@ -1,5 +1,5 @@
 dataloader_args:
-  batch_size: 2 #RTX2080 1, V100: 8, A800: 16
+  batch_size: 1 #RTX2080 1, V100: 8, A800: 16
   drop_last: true
   num_workers: 12
   pin_memory: true
@@ -45,7 +45,7 @@ model:
   tse_model: TSE_BSRNN_SPK_SPATIAL
 model_args:
   tse_model:  
-    full_input: False      
+    full_input: True      
     separator:
       sr: 16000
       win: 512
@@ -57,7 +57,7 @@ model_args:
     speaker:
       features:
         listen:
-          enabled: False
+          enabled: True
           glue: 512
         usef:
           enabled: True
@@ -66,17 +66,17 @@ model_args:
           n_head: 4
           t_ksize: 3
         tfmap:
-          enabled: False
+          enabled: True
           type: "spec"   # 'spec'
         context:
-          enabled: False
+          enabled: True
           speaker_model:
           embed_dim: 512     # Need check the speaker encoder in wespeaker
           atten_dim: 128         # dim in cross-attention
           num_heads: 2
           fusion": "multiply"    # add | concat | multiply
         spkemb:
-          enabled: False
+          enabled: True
           speaker_model:
           fusion: "multiply" # add | concat | multiply
       speaker_model:
@@ -128,13 +128,13 @@ model_args:
         - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
       features:
         ipd: 
-          enabled: False        
+          enabled: True        
         cdf: 
           enabled: True       
         sdf: 
           enabled: True      
         delta_stft: 
-          enabled: False
+          enabled: True
         Multiply_emb:
           enabled: True
           num_encoder: 1
@@ -145,7 +145,7 @@ model_args:
           use_ele: True
           out_channel: 1       
         InitStates_emb:
-          enabled: False
+          enabled: True
           num_encoder: 1
           encoding_config:
             encoding: "oh"

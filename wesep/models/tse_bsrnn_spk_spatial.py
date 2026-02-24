@@ -15,7 +15,7 @@ from wesep.modules.separator.bsrnn import BSRNN
 from wesep.modules.common.deep_update import deep_update
 
 
-class TSE_BSRNN_SPK(nn.Module):
+class TSE_BSRNN_SPK_SPATIAL(nn.Module):
 
     def __init__(self, config):
         super().__init__()
@@ -124,15 +124,15 @@ class TSE_BSRNN_SPK(nn.Module):
             },
         }
         self.spk_configs = deep_update(spk_configs, config['speaker'])
+        if self.full_input:
+            sep_configs["spec_dim"] = 2 * len(self.spatial_configs['geometry']['mic_coords'])
         # ===== Separator Loading =====
         if self.spk_configs["features"]["usef"]["enabled"]:
-            sep_configs["spec_dim"] = self.spk_configs["features"]["usef"][
+            sep_configs["spec_dim"] += self.spk_configs["features"]["usef"][
                 "emb_dim"] * 2
         if self.spk_configs["features"]["tfmap"]["enabled"]:
             sep_configs["spec_dim"] = sep_configs["spec_dim"] + 1  #
         n_pairs = len(self.spatial_configs['pairs'])
-        if self.full_input:
-            sep_configs["spec_dim"] = 2 * len(self.spatial_configs['geometry']['mic_coords'])
         if self.spatial_configs["features"]["ipd"]["enabled"]:
             sep_configs["spec_dim"] += n_pairs * self.spatial_configs["features"]["ipd"]["num_encoder"]
         if self.spatial_configs["features"]["cdf"]["enabled"]:
@@ -159,84 +159,82 @@ class TSE_BSRNN_SPK(nn.Module):
     def forward(self, mix, cue):
         """
         Args:
-            mix:  Tensor [B, 1, T]
-            enroll: list[Tensor]
-                each Tensor: [B, 1, T]
+            mix:  Tensor [B, M, T]
+            cue: list[Tensor]
+                 cue[0]: enroll Tensor [B, 1, T]
+                 cue[1]: spatial_cue Tensor [B, 2] -> [azimuth, elevation] (弧度)
         """
-
-        # mix = mix.squeeze(1)
         enroll = cue[0].squeeze(1)
         spatial_cue = cue[1]
         azi_rad = spatial_cue[:, 0]
         ele_rad = spatial_cue[:, 1]
         
-        # input shape: (B, T)
-        mix_dims = mix.dim()
-        assert mix_dims == 2, "Only support 2D Input"
-
         ##### Cue of the target speaker
-        wav_enroll = enroll
+        wav_enroll = enroll[..., 0] # only ref channel
+        
         ###### Extraction with speaker cue
-        batch_size, nsamples = mix.shape
         wav_mix = mix
+        
         ###########################################################
         # C0. Feature: listen
         if self.spk_configs['features']['listen']['enabled']:
-            # C0.1 Prepend the enroll to the mix in the beginning
-            wav_mix = self.spk_ft.listen.compute(wav_enroll,
-                                                 wav_mix)  # (B, T_e + T_s + T)
+            B, M, T = wav_mix.shape
+            processed_channels = []
+            for m in range(M):
+                processed_ch = self.spk_ft.listen.compute(wav_enroll, wav_mix[:, m, :])
+                processed_channels.append(processed_ch)
+                
+            wav_mix = torch.stack(processed_channels, dim=1)
+            
         ###########################################################
         # S1. Convert into frequency-domain
         spec = self.sep_model.stft(wav_mix)[-1]
+        
         # S2. Concat real and imag, split to subbands
-        spec_RI=None
+        spec_RI = None
+        spec_RI_single = torch.stack([spec[:, 0].real, spec[:, 0].imag], 1)
+        
         if self.full_input:
             spec_RI = torch.cat([spec.real, spec.imag], dim=1)
         else :
-            spec_RI = torch.stack([spec.real, spec.imag], 1)  # (B, 2, F, T)
+            spec_RI = spec_RI_single  # (B, 2, F, T)
+        
         ###########################################################
         # C1. Feature: usef
         if self.spk_configs['features']['usef']['enabled']:
-            # C1.1 Generate the USEF feature
-            enroll_spec = self.sep_model.stft(wav_enroll)[
-                -1]  # (B, F, T_e) complex
-            enroll_spec = torch.stack([enroll_spec.real, enroll_spec.imag],
-                                      1)  # (B, 2, F, T)
-            enroll_usef, mix_usef = self.spk_ft.usef.compute(
-                enroll_spec, spec_RI)  # (B, embed_dim, F, T)
-            # C1.2 Concate the USEF feature to the mix_repr's spec
-            spec_RI = self.spk_ft.usef.post(
-                mix_usef, enroll_usef)  # (B, embed_dim*2, F, T)
+            enroll_spec = self.sep_model.stft(wav_enroll)[-1]  # (B, F, T_e) complex
+            enroll_spec = torch.stack([enroll_spec.real, enroll_spec.imag], 1)  # (B, 2, F, T)
+            enroll_usef, mix_usef = self.spk_ft.usef.compute(enroll_spec, spec_RI_single)  
+            usef_feat = self.spk_ft.usef.post(mix_usef, enroll_usef) 
+            spec_RI = torch.cat([spec_RI, usef_feat], dim=1)
+            
         # C2. Feature: tfmap
         if self.spk_configs['features']['tfmap']['enabled']:
-            # C2.1 Generate the TF-Map feature
-            enroll_mag = self.sep_model.stft(wav_enroll)[0]  # (B, F, T_e)
-            enroll_tfmap = self.spk_ft.tfmap.compute(
-                enroll_mag, torch.abs(spec))  # (B, F, T)
-            # C2.2 Concate the TF-Map feature to the mix_repr's spec
-            spec_RI = self.spk_ft.tfmap.post(
-                spec_RI, enroll_tfmap.unsqueeze(1))  # (B, 3, F, T)
+            enroll_mag = self.sep_model.stft(wav_enroll)[0]  
+            enroll_tfmap = self.spk_ft.tfmap.compute(enroll_mag, torch.abs(spec[:,0])) 
+            spec_RI = self.spk_ft.tfmap.post(spec_RI, enroll_tfmap.unsqueeze(1)) 
             
-        if self.spatial_configs['features']['ipd']['enabled'] :
-            ipd_feature = self.spatial_ft.features['ipd'].compute(spec)
-            spec_RI = self.spatial_ft.features['ipd'].post(spec_RI,ipd_feature)
+        ###########################################################
+        # Early Spatial Features
+        if self.spatial_configs['features']['ipd']['enabled']:
+            ipd_feature = self.spatial_ft.features['ipd'].compute(Y=spec)
+            spec_RI = self.spatial_ft.features['ipd'].post(spec_RI, ipd_feature)
         
-        if self.spatial_configs['features']['cdf']['enabled'] :
-            cdf_feature = self.spatial_ft.features['cdf'].compute(spec,azi_rad,ele_rad)
-            spec_RI = self.spatial_ft.features['cdf'].post(spec_RI,cdf_feature)
+        if self.spatial_configs['features']['cdf']['enabled']:
+            cdf_feature = self.spatial_ft.features['cdf'].compute(Y=spec, azi=azi_rad, ele=ele_rad)
+            spec_RI = self.spatial_ft.features['cdf'].post(spec_RI, cdf_feature)
         
         if self.spatial_configs['features']['sdf']['enabled']:
-            sdf_feature = self.spatial_ft.features['sdf'].compute(spec,azi_rad,ele_rad)
-            spec_RI = self.spatial_ft.features['sdf'].post(spec_RI,sdf_feature)
+            sdf_feature = self.spatial_ft.features['sdf'].compute(Y=spec, azi=azi_rad, ele=ele_rad)
+            spec_RI = self.spatial_ft.features['sdf'].post(spec_RI, sdf_feature)
         
         if self.spatial_configs['features']['delta_stft']['enabled']:
-            dstft_feature = self.spatial_ft.features['delta_stft'].compute(spec)
-            spec_RI = self.spatial_ft.features['delta_stft'].post(spec_RI,dstft_feature)
+            dstft_feature = self.spatial_ft.features['delta_stft'].compute(Y=spec)
+            spec_RI = self.spatial_ft.features['delta_stft'].post(spec_RI, dstft_feature)
         ###########################################################
         subband_spec = self.sep_model.band_split(
             spec_RI)  # list of (B, 2/3/2*usef.emb_dim, BW, T)
-        subband_mix_spec = self.sep_model.band_split(
-            spec)  # list of (B, BW, T) complex
+        subband_mix_spec = self.sep_model.band_split(spec[:, 0])
         # S3. Normalization and bottleneck
         subband_feature = self.sep_model.subband_norm(
             subband_spec)  # (B, nband, feat, T)
