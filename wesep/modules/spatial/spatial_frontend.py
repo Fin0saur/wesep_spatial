@@ -142,11 +142,10 @@ class TimeVariantMultiplyFeature(BaseSpatialFeature):
 
         # Input: (B, T, enc_dim) -> Output: (B, T, out_channels)
         spatial_repr = self.mlp(doa_enc)
+        spatial_repr = spatial_repr.permute(0, 2, 1).unsqueeze(2) # (B, C, 1, T)
 
-        # (B, T, C) -> Permute to (B, C, T) -> Unsqueeze to (B, C, 1, T)
-        spatial_repr = spatial_repr.permute(0, 2, 1).unsqueeze(2)
-        
-        return spatial_repr
+        is_missing = (azi <= -998.0).view(-1, 1, 1, 1)
+        return torch.where(is_missing, torch.ones_like(spatial_repr), spatial_repr)
 
     def post(self, mix_repr, spatial_repr):
         if spatial_repr is None:
@@ -184,7 +183,10 @@ class CDFFeature(BaseSpatialFeature):
         _, _, F_dim, _ = Y.shape
         TPD = self._compute_tpd(azi, ele, F_dim, target_pairs)
         
-        return torch.cos(IPD - TPD)
+        out = torch.cos(IPD - TPD)
+        
+        is_missing = (azi <= -998.0).view(-1, 1, 1, 1) 
+        return torch.where(is_missing, torch.ones_like(out), out)
 
     def post(self, mix_repr, spatial_repr):
         return torch.cat([mix_repr, spatial_repr], dim=1)
@@ -203,7 +205,10 @@ class SDFFeature(BaseSpatialFeature):
         _, _, F_dim, _ = Y.shape
         TPD = self._compute_tpd(azi, ele, F_dim, target_pairs)
         
-        return torch.sin(IPD - TPD)
+        out = torch.sin(IPD - TPD)
+        
+        is_missing = (azi <= -998.0).view(-1, 1, 1, 1)
+        return torch.where(is_missing, torch.zeros_like(out), out)
 
     def post(self, mix_repr, spatial_repr):
         return torch.cat([mix_repr, spatial_repr], dim=1)

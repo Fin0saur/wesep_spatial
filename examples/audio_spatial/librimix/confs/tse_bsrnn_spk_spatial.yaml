@@ -1,5 +1,5 @@
 dataloader_args:
-  batch_size: 1 #RTX2080 1, V100: 8, A800: 16
+  batch_size: 2 #RTX2080 1, V100: 8, A800: 16
   drop_last: true
   num_workers: 12
   pin_memory: true
@@ -45,7 +45,7 @@ model:
   tse_model: TSE_BSRNN_SPK_SPATIAL
 model_args:
   tse_model:  
-    full_input: True      
+    full_input: True     
     separator:
       sr: 16000
       win: 512
@@ -57,7 +57,7 @@ model_args:
     speaker:
       features:
         listen:
-          enabled: True
+          enabled: False
           glue: 512
         usef:
           enabled: True
@@ -66,7 +66,7 @@ model_args:
           n_head: 4
           t_ksize: 3
         tfmap:
-          enabled: True
+          enabled: False
           type: "spec"   # 'spec'
         context:
           enabled: True
@@ -76,7 +76,7 @@ model_args:
           num_heads: 2
           fusion": "multiply"    # add | concat | multiply
         spkemb:
-          enabled: True
+          enabled: False
           speaker_model:
           fusion: "multiply" # add | concat | multiply
       speaker_model:
@@ -128,7 +128,7 @@ model_args:
         - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
       features:
         ipd: 
-          enabled: True        
+          enabled: True      
         cdf: 
           enabled: True       
         sdf: 
@@ -136,7 +136,7 @@ model_args:
         delta_stft: 
           enabled: True
         Multiply_emb:
-          enabled: True
+          enabled: False
           num_encoder: 1
           encoding_config:
             encoding: "cyc"
@@ -145,7 +145,7 @@ model_args:
           use_ele: True
           out_channel: 1       
         InitStates_emb:
-          enabled: True
+          enabled: False
           num_encoder: 1
           encoding_config:
             encoding: "oh"

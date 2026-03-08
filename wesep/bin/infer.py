@@ -15,6 +15,7 @@ from wesep.dataset.collate import (
     tse_collate_fn,
     AUX_KEY_MAP,
 )
+import numpy as np
 from wesep.models import get_model
 from wesep.utils.checkpoint import load_pretrained_model
 from wesep.utils.score import cal_SISNRi
@@ -24,6 +25,7 @@ from wesep.utils.utils import (
     parse_config_or_kwargs,
     set_seed,
 )
+from wesep.utils.file_utils import load_yaml
 
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["TORCH_USE_CUDA_DSA"] = "1"
@@ -96,7 +98,7 @@ def infer(config="confs/conf.yaml", **kwargs):
         batch_size=1,
         collate_fn=lambda batch: tse_collate_fn(batch, test_collect_keys))
 
-    with open(configs["val_samples"], "r", encoding="utf-8") as f:
+    with open(configs["test_data"], "r", encoding="utf-8") as f:
         test_iter = sum(1 for _ in f)
     logger.info("test number: {}".format(test_iter))
 

@@ -14,14 +14,14 @@ fs=16k
 min_max=min
 noise_type="clean"
 data_type="raw" # shard/raw
-Libri2Mix_dir=/YourPATH/librimix/Libri2Mix
+Libri2Mix_dir=/YourPATH/librimix/Libri2Mix  #
 mix_data_path="${Libri2Mix_dir}/wav${fs}/${min_max}"
 
 # Training related
 gpus="[0]"
 config=confs/tse_bsrnn_spk_spatial.yaml
 data_config=confs/create_dataset.yaml
-exp_dir=exp/TSE_bsrnn_spk_spatial
+exp_dir=exp/TSE_BSRNN_SPK_SPATIAL
 if [ -z "${config}" ] && [ -f "${exp_dir}/config.yaml" ]; then
   config="${exp_dir}/config.yaml"
 fi
@@ -55,7 +55,14 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     --stage 1 \
     --stop-stage 4
 fi
-
+# if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
+#   echo "Prepare hybrid datasets ..."
+#   ./local/prepare_hybrid_cues_data.sh --mix_data_path ${mix_data_path} \
+#     --data ${data} \
+#     --noise_type ${noise_type} \
+#     --stage 1 \
+#     --stop-stage 4
+# fi
 data=${data}/${noise_type}
 
 # if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ] && [ "${datatype}" = "shard" ]; then

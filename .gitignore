@@ -35,9 +35,11 @@ venv
 
 exp
 data
+data_hybrid
 raw_wav
 tensorboard
 # **/*build*
 wespeaker_models
 
 *.zip
+*.pt

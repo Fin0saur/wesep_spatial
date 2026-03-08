@@ -78,7 +78,7 @@ def build_speaker_cue(dataset, cue_conf, state, configs):
     """
     Stub for speaker cue
     """
-    required = cue_conf.get("required", True)
+    required = cue_conf.get("guaranteed", True)
     scope = cue_conf.get("scope", "speaker")  # "speaker", "utterance"
 
     policy_conf = cue_conf.get("policy", {})
@@ -173,7 +173,7 @@ def build_spatial_cue(dataset, cue_conf, state, configs):
     """
     Stub for spatial cue
     """
-    required = cue_conf.get("required", True)
+    required = cue_conf.get("guaranteed", True)
     scope = cue_conf.get("scope", "speaker")  # "speaker", "utterance"
 
     policy_conf = cue_conf.get("policy", {})

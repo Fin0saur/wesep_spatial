@@ -170,7 +170,7 @@ class TSE_BSRNN_SPK_SPATIAL(nn.Module):
         ele_rad = spatial_cue[:, 1]
         
         ##### Cue of the target speaker
-        wav_enroll = enroll[..., 0] # only ref channel
+        wav_enroll = enroll# only ref channel
         
         ###### Extraction with speaker cue
         wav_mix = mix

@@ -70,7 +70,7 @@ model_args:
         - [ 0.05,        0.0, 0.0]  # Mic 3 (最右)
       features:
         ipd: 
-          enabled: True       
+          enabled: True      
         cdf: 
           enabled: True       
         sdf: 
@@ -78,7 +78,7 @@ model_args:
         delta_stft: 
           enabled: True
         Multiply_emb:
-          enabled: True
+          enabled: False
           num_encoder: 1
           encoding: "cyc"
           encoding_config:
