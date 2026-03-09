@@ -150,14 +150,11 @@ class TimeVariantMultiplyFeature(BaseSpatialFeature):
         if azi.dim() == 1: azi = azi.unsqueeze(1)
         if ele is not None and ele.dim() == 1: ele = ele.unsqueeze(1)
         
-        if self.encoding_type == "exp":
-            doa_enc = self.encoder(azi, ele)
-        else:
-            doa_enc = self.encoder(azi)
-            if self.use_ele and ele is not None:
-                ele_input = torch.abs(ele) if self.encoding_type in ["oh", "onehot"] else ele
-                ele_enc = self.encoder(ele_input)
-                doa_enc = torch.cat([doa_enc, ele_enc], dim=-1)
+        doa_enc = self.encoder(azi)
+        if self.use_ele and ele is not None:
+            ele_input = torch.abs(ele) if self.encoding_type in ["oh", "onehot"] else ele
+            ele_enc = self.encoder(ele_input)
+            doa_enc = torch.cat([doa_enc, ele_enc], dim=-1)
 
         # Input: (B, T, enc_dim) -> Output: (B, T, out_channels)
         spatial_repr = self.mlp(doa_enc)
