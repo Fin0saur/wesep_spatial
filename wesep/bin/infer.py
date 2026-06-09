@@ -118,54 +118,45 @@ def infer(config="confs/conf.yaml", **kwargs):
             if isinstance(outputs, (list, tuple)):
                 outputs = outputs[0]
 
-            if torch.min(outputs.max(dim=1).values) > 0:
-                outputs = ((outputs /
-                            abs(outputs).max(dim=1, keepdim=True)[0] *
-                            0.9).cpu().numpy())
+            reduce_dims = tuple(range(1, outputs.dim()))
+            if torch.min(outputs.amax(dim=reduce_dims)) > 0:
+                peak = outputs.abs().amax(dim=reduce_dims, keepdim=True)
+                outputs = ((outputs / peak.clamp_min(1e-8) * 0.9).cpu().numpy())
             else:
                 outputs = outputs.cpu().numpy()
 
-            if sign_save_wav:
-                file1 = os.path.join(
-                    save_audio_dir,
-                    f"Utt{total_cnt + 1}-{key[0]}-T{spk[0]}.wav",
-                )
-                soundfile.write(file1, outputs[0], sample_rate)
-                file2 = os.path.join(
-                    save_audio_dir,
-                    f"Utt{total_cnt + 1}-{key[1]}-T{spk[1]}.wav",
-                )
-                soundfile.write(file2, outputs[1], sample_rate)
-
+            ests = np.squeeze(outputs, axis=1) if outputs.ndim == 3 and outputs.shape[1] == 1 else outputs
             ref = target.cpu().numpy()
-            ests = outputs
+            ref = np.squeeze(ref, axis=1) if ref.ndim == 3 and ref.shape[1] == 1 else ref
             mix = mix.cpu().numpy()
+            mix_ref = mix[:, 0, :] if mix.ndim == 3 else mix
 
-            min_len = min(ref.shape[-1], ests.shape[-1], mix.shape[-1])
+            min_len = min(ref.shape[-1], ests.shape[-1], mix_ref.shape[-1])
             ref = ref[..., :min_len]
             ests = ests[..., :min_len]
-            mix = mix[..., :min_len]
+            mix_ref = mix_ref[..., :min_len]
 
-            SISNR1, delta1 = cal_SISNRi(ests[0], ref[0], mix[0])
+            for idx in range(ests.shape[0]):
+                if sign_save_wav:
+                    wav_path = os.path.join(
+                        save_audio_dir,
+                        f"Utt{total_cnt + 1}-{key[idx]}-T{spk[idx]}.wav",
+                    )
+                    soundfile.write(wav_path, np.squeeze(ests[idx]), sample_rate)
 
-            logger.info(
-                "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f}"
-                .format(total_cnt + 1, key[0], spk[0], SISNR1, delta1))
-            total_SISNR += SISNR1
-            total_SISNRi += delta1
-            total_cnt += 1
-            if delta1 > 1:
-                accept_cnt += 1
-
-            SISNR2, delta2 = cal_SISNRi(ests[1], ref[1], mix[1])
-            logger.info(
-                "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f}"
-                .format(total_cnt + 1, key[1], spk[1], SISNR2, delta2))
-            total_SISNR += SISNR2
-            total_SISNRi += delta2
-            total_cnt += 1
-            if delta2 > 1:
-                accept_cnt += 1
+                sisnr, delta = cal_SISNRi(
+                    np.squeeze(ests[idx]),
+                    np.squeeze(ref[idx]),
+                    np.squeeze(mix_ref[idx]),
+                )
+                logger.info(
+                    "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f}"
+                    .format(total_cnt + 1, key[idx], spk[idx], sisnr, delta))
+                total_SISNR += sisnr
+                total_SISNRi += delta
+                total_cnt += 1
+                if delta > 1:
+                    accept_cnt += 1
 
         end = time.time()
     # generate the scp file of the enhanced speech for scoring
