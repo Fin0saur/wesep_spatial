@@ -3,6 +3,7 @@ from scipy import signal
 import os
 import soundfile as sf
 import argparse
+import bisect
 import gpuRIR
 import glob
 import random
@@ -178,6 +179,103 @@ class DataGenerator:
     def _get_file_id(path):
         return os.path.splitext(os.path.basename(path))[0]
 
+    @staticmethod
+    def _sample_unique_source_pairs(speaker_map, speakers, count):
+        """Sample unordered cross-speaker utterance pairs without replacement.
+
+        The candidate space is represented as contiguous speaker-pair blocks,
+        so only ``count`` integer indices are sampled instead of materializing
+        every possible utterance pair.  The source order is then randomized to
+        decide which utterance is the target and which is the interferer.
+        """
+        files_by_speaker = {
+            speaker: speaker_map[speaker]
+            for speaker in speakers
+        }
+        block_ends = []
+        blocks = []
+        total_pairs = 0
+        for speaker_index, first_speaker in enumerate(speakers):
+            first_files = files_by_speaker[first_speaker]
+            for second_speaker in speakers[speaker_index + 1:]:
+                second_files = files_by_speaker[second_speaker]
+                total_pairs += len(first_files) * len(second_files)
+                block_ends.append(total_pairs)
+                blocks.append((first_files, second_files))
+
+        if count > total_pairs:
+            raise ValueError(
+                f"Requested {count} mixtures, but only {total_pairs} unique "
+                "cross-speaker utterance pairs are available."
+            )
+
+        sampled_pairs = []
+        for pair_index in random.sample(range(total_pairs), count):
+            block_index = bisect.bisect_right(block_ends, pair_index)
+            block_start = 0 if block_index == 0 else block_ends[block_index - 1]
+            local_index = pair_index - block_start
+            first_files, second_files = blocks[block_index]
+            second_count = len(second_files)
+            first_file = first_files[local_index // second_count]
+            second_file = second_files[local_index % second_count]
+
+            if random.random() < 0.5:
+                sampled_pairs.append((first_file, second_file))
+            else:
+                sampled_pairs.append((second_file, first_file))
+
+        return sampled_pairs, total_pairs
+
+    @staticmethod
+    def _get_output_ids(dirs):
+        """Collect generated IDs for every output modality."""
+        patterns = {
+            'mix': '*.wav',
+            's1': '*.wav',
+            's2': '*.wav',
+            'spatial': '*.npy',
+        }
+        output_ids = {
+            name: {
+                os.path.splitext(os.path.basename(path))[0]
+                for path in glob.glob(os.path.join(dirs[name], pattern))
+            }
+            for name, pattern in patterns.items()
+        }
+
+        return output_ids
+
+    @classmethod
+    def _require_empty_output_dirs(cls, dirs):
+        """Require a clean destination for a new deterministic-size run."""
+        output_ids = cls._get_output_ids(dirs)
+        counts = {name: len(ids) for name, ids in output_ids.items()}
+        if any(counts.values()):
+            raise RuntimeError(
+                "Spatial synthesis output is not empty: "
+                f"counts={counts}. Choose a new dataset.paths.output or "
+                "remove the previous generated split before starting a new "
+                "synthesis run. Existing data is never resumed or overwritten."
+            )
+
+    @classmethod
+    def _validate_output_count(cls, dirs, expected_count):
+        """Verify exact count and one-to-one keys across all modalities."""
+        output_ids = cls._get_output_ids(dirs)
+        reference_ids = output_ids['mix']
+        if any(ids != reference_ids for ids in output_ids.values()):
+            counts = {name: len(ids) for name, ids in output_ids.items()}
+            raise RuntimeError(
+                "Generated spatial dataset has inconsistent modality keys: "
+                f"counts={counts}."
+            )
+        actual_count = len(reference_ids)
+        if actual_count != expected_count:
+            raise RuntimeError(
+                f"Spatial synthesis generated {actual_count} complete samples; "
+                f"expected exactly {expected_count}."
+            )
+
     def run(self):
         full_len_samples = int(self.duration * self.sr)
         num_mic = self.mic_pos_template.shape[0]
@@ -199,6 +297,16 @@ class DataGenerator:
                 continue
                 
             count = dataset_counts[data_type]
+
+            source_pairs, total_unique_pairs = self._sample_unique_source_pairs(
+                current_spk_map,
+                current_spk_list,
+                count,
+            )
+            print(
+                f"Sampled {count} unique source pairs from "
+                f"{total_unique_pairs} available cross-speaker pairs."
+            )
             
             folder_name = None
             if data_type == "train":
@@ -217,23 +325,27 @@ class DataGenerator:
             }
             for p in dirs.values():
                 os.makedirs(p, exist_ok=True)
-            
-            for idx in range(count):
-                        
-                target_spk_id, interf_spk_id = random.sample(current_spk_list, 2)
-                t_files = random.sample(current_spk_map[target_spk_id], 1)
-                target_src_file = t_files[0]
-                interf_file = random.choice(current_spk_map[interf_spk_id])
+
+            self._require_empty_output_dirs(dirs)
+
+            output_ids = set()
+            for idx, (target_src_file, interf_file) in enumerate(source_pairs):
+                output_filename = (
+                    f"{self._get_file_id(target_src_file)}_"
+                    f"{self._get_file_id(interf_file)}"
+                )
+                if output_filename in output_ids:
+                    raise RuntimeError(
+                        "Duplicate LibriSpeech utterance IDs produced the same "
+                        f"mixture key: {output_filename}"
+                    )
+                output_ids.add(output_filename)
                     
                 if not self.noise_list:
                     noise_audio = np.zeros(full_len_samples) 
                 else:
                     noise_file = random.choice(self.noise_list)
                     noise_audio = self._read_audio(noise_file, full_len_samples, is_noise=True)
-                    
-                s1_id = self._get_file_id(target_src_file)
-                s2_id = self._get_file_id(interf_file)
-                output_filename = f"{s1_id}_{s2_id}"
                     
                 ov_min, ov_max = mix_cfg['overlap_ratio_range']
                 overlap_ratio = np.random.uniform(ov_min, ov_max)
@@ -320,8 +432,11 @@ class DataGenerator:
                 }
                 np.save(os.path.join(dirs['spatial'], output_filename + '.npy'), meta_data)
                     
-                if (idx + 1) % 100 == 0:
-                    print(f"  [{data_type}] Generated {idx + 1} / {count}")
+                completed = idx + 1
+                if completed % 100 == 0 or completed == count:
+                    print(f"  [{data_type}] Generated {completed} / {count}")
+
+            self._validate_output_count(dirs, count)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate multi-channel Libri2Mix-style data with Config')

@@ -7,6 +7,11 @@ from pathlib import Path
 def parse_spk_from_key(key: str):
     # key: 7059-77900-0042_6385-34655-0034
     parts = key.split("_")
+    if len(parts) != 2:
+        raise ValueError(
+            "Invalid spatial mixture key; expected exactly two source "
+            f"utterance IDs separated by one underscore: {key}"
+        )
     spk = []
     for p in parts:
         spk_id = p.split("-")[0]
