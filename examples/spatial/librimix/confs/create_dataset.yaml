@@ -28,9 +28,9 @@ mixing:
 
 dataset:
   paths:
-    librispeech: "/data0/import/asr/LibriSpeech"
-    noise: "/data1/yxy05/Nonspeech"
-    output: "/data1/yxy05/Spatial_librimix_ttst/wav16k/min"
+    librispeech: "/YourPATH/LibriSpeech"
+    noise: "/YourPATH/Nonspeech"
+    output: "/YourPATH/Spatial_Libri2mix"
   splits:
     train: "train-clean-100"
     dev: "dev-clean"
